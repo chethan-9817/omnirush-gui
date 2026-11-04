@@ -3,6 +3,25 @@
   "schema": 1,
   "cli": [
     {
+      "version": "2.7.9",
+      "date": "2026-11-04",
+      "new": [],
+      "improved": [
+        "Reliability improvements."
+      ],
+      "fixed": []
+    },
+    {
+      "version": "2.7.8",
+      "date": "2026-10-30",
+      "new": [],
+      "improved": [],
+      "fixed": [
+        "Automatic updates work again. Since 2.6.5 a downloaded update was never switched to, so OmniRush kept running the version you had; if you are on 2.6.5–2.7.7, update once with `npm i -g omnirush@latest`.",
+        "When a required update can't be installed, OmniRush shows the command to run instead of an internal error message."
+      ]
+    },
+    {
       "version": "2.7.7",
       "date": "2026-10-30",
       "new": [
