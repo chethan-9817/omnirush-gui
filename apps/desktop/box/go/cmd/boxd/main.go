@@ -557,6 +557,9 @@ func commandEnv(cfg config, extra map[string]string) []string {
 	if cfg.pathPre != "" {
 		set("PATH", cfg.pathPre+":"+env["PATH"])
 	}
+	if egressPort.Load() > 0 {
+		set("PATH", offlineBin+":"+env["PATH"])
+	}
 	out := make([]string, 0, len(order))
 	for _, k := range order {
 		if v, ok := env[k]; ok {

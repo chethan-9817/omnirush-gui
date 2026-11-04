@@ -48,7 +48,7 @@ import { YOUNG_IMAGE_MS, removableImage, removeTree, staleEntries } from "../ret
 import { runCommand, type RunCommand, type RunOptions, type RunResult } from "../run.js";
 import type { RuntimeResult } from "../runtime.js";
 import { macosMajor } from "./apple.js";
-import { IDLE_MINUTES, newMeta, upArgs, type BoxMeta } from "./bwrap.js";
+import { IDLE_MINUTES, boxEgress, newMeta, upArgs, type BoxMeta } from "./bwrap.js";
 import { boxshExec, num, parseOut, str } from "./shared.js";
 import type { BoxDriver, ListedBox, OpenContext, Opened, PresentImage, Removed, SpawnLike } from "./types.js";
 import { download, type DownloadOptions } from "./wsl.js";
@@ -1135,7 +1135,7 @@ async function openWithLease(ctx: OpenContext & LimaOpenExtras, runtime: LimaRun
   const args = upArgs({
     box: boxPath(key), store: STORE, image: meta.image, boxd: `${runtime.helpers}/boxd`, portFile: path.join(runFolder, "boxd.port"),
     root, croot, runFolder, shims, pkglog, token: meta.token, idleMinutes: idle, listen: `127.0.0.1:${port}`, platform: "darwin",
-    shadows, shadowStore: shadows ? `${SHADOW_STORES}/${key}` : null,
+    shadows, shadowStore: shadows ? `${SHADOW_STORES}/${key}` : null, egress: boxEgress(env),
   });
   releaseAllOnExit();
   let kept = await startKeeper(runtime, args, { env, ...(spawnImpl ? { spawnImpl } : {}) });

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { BOX_HEADER } from "../model-modes/model-modes.mjs";
-import { keyOf } from "../box/plugin-lib.js";
+import { BOX_NOTE, OFFLINE_NOTE, keyOf } from "../box/plugin-lib.js";
 import plugin from "./omnirush-box-next.js";
 
 type Hook = (event: any) => Promise<void>;
@@ -64,6 +64,30 @@ test("a box chat's shell calls carry its box key and chat, its requests say box,
   expect(JSON.stringify(context.system.at(-1))).toContain("Sandbox: shell commands run in a Linux");
   // File tools stay in the project folder: the rest is the box's.
   await expect(hooks.get("tool:execute.before")!({ tool: "read", id: "call_2", sessionID: "ses_a", input: { filePath: "/etc/hostname" } })).rejects.toThrow(/outside the project folder/);
+});
+
+test("farm runs: the prompt gets the offline line only (no box note); other runs never get it", async () => {
+  const { root } = project(true);
+  const hooks = await engine(root);
+  const saved = process.env.OMNIRUSH_FARM;
+  try {
+    process.env.OMNIRUSH_FARM = "1";
+    const farm = { sessionID: "ses_f", system: ["Platform: darwin"] as unknown[] };
+    await hooks.get("context")!(farm);
+    expect(farm.system).toEqual(["Platform: linux", { type: "text", text: OFFLINE_NOTE }]);
+    expect(OFFLINE_NOTE).toBe("This session is offline: the shell cannot reach the internet, except package installs (npm/pnpm/yarn, pip/uv, cargo, go, composer). Mock external services and APIs instead of calling them.");
+    for (const off of [undefined, "0"]) {
+      if (off === undefined) delete process.env.OMNIRUSH_FARM;
+      else process.env.OMNIRUSH_FARM = off;
+      const normal = { sessionID: "ses_n", system: ["Platform: darwin"] as unknown[] };
+      await hooks.get("context")!(normal);
+      expect(normal.system).toEqual(["Platform: linux", { type: "text", text: BOX_NOTE(root, 0, root, undefined) }]);
+      expect(JSON.stringify(normal.system)).not.toContain("offline");
+    }
+  } finally {
+    if (saved === undefined) delete process.env.OMNIRUSH_FARM;
+    else process.env.OMNIRUSH_FARM = saved;
+  }
 });
 
 test("a project whose box is off is left alone: no box key, no box header, no note", async () => {

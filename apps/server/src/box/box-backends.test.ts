@@ -95,6 +95,24 @@ function linuxRun(bwrapAnswer: unknown, { podman = true }: { podman?: boolean } 
 }
 
 describe("box backends: Linux", () => {
+  test("farm runs: only backends that keep the box offline; Podman/Docker are skipped, never a silent fallback", async () => {
+    const home = tmp();
+    const env = { PATH: "/usr/bin", OMNIRUSH_BOX_BIN_DIR: helperBin(), OMNIRUSH_FARM: "1" };
+    const farm = await detectBackend({ boxHome: home, platform: "linux", home, env, exists: set(boxrunPath({ env }), "/usr/bin/podman"), run: linuxRun(BWRAP_AA).run, fresh: true, all: true, wsl: false });
+    expect(farm.ok).toBe(false);
+    expect(farm.alternatives?.find((a) => a.backend === "podman")?.reason).toBe("cannot keep a farm session offline");
+    const asked = await detectBackend({ boxHome: home, platform: "linux", home, env, exists: set(boxrunPath({ env }), "/usr/bin/podman"), run: linuxRun(BWRAP_OK).run, fresh: true, asked: "podman", wsl: false });
+    expect(asked.ok).toBe(false);
+    const ok = await detectBackend({ boxHome: home, platform: "linux", home, env, exists: set(boxrunPath({ env }), "/usr/bin/podman"), run: linuxRun(BWRAP_OK).run, fresh: true, wsl: false });
+    expect(ok).toMatchObject({ ok: true, backend: "bwrap" });
+    if (ok.ok) expect(ok.why).toMatch(/farm mode/);
+    // boxsh's `wslc exec` fallback runs outside boxd's network: off in farm runs, kept otherwise.
+    const runtime = { name: "wslc", backend: "wslc", bin: "wslc.exe" };
+    const base = { key: "k", name: "omnirush-box-k", root: home, croot: home, runtime, home, runFolder: home, run: linuxRun(BWRAP_OK).run, log: () => {}, platform: "win32" as const };
+    expect(new Box({ ...base, env: {} }).execFallback()).toBe(true);
+    expect(new Box({ ...base, env: { OMNIRUSH_FARM: "1" } }).execFallback()).toBe(false);
+  });
+
   test("bubblewrap first when its probe starts a namespace", async () => {
     const home = tmp();
     const env = { PATH: "/usr/bin", OMNIRUSH_BOX_BIN_DIR: helperBin() };
