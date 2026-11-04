@@ -71,10 +71,12 @@ test("farm runs: the prompt gets the offline line only (no box note); other runs
   const hooks = await engine(root);
   const saved = process.env.OMNIRUSH_FARM;
   try {
-    process.env.OMNIRUSH_FARM = "1";
-    const farm = { sessionID: "ses_f", system: ["Platform: darwin"] as unknown[] };
-    await hooks.get("context")!(farm);
-    expect(farm.system).toEqual(["Platform: linux", { type: "text", text: OFFLINE_NOTE }]);
+    for (const on of ["1", "true", "on", "yes"]) {
+      process.env.OMNIRUSH_FARM = on;
+      const farm = { sessionID: "ses_f", system: ["Platform: darwin"] as unknown[] };
+      await hooks.get("context")!(farm);
+      expect(farm.system).toEqual(["Platform: linux", { type: "text", text: OFFLINE_NOTE }]);
+    }
     expect(OFFLINE_NOTE).toBe("This session is offline: the shell cannot reach the internet, except package installs (npm/pnpm/yarn, pip/uv, cargo, go, composer). Mock external services and APIs instead of calling them.");
     for (const off of [undefined, "0"]) {
       if (off === undefined) delete process.env.OMNIRUSH_FARM;

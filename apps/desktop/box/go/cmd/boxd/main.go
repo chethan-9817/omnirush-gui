@@ -160,6 +160,9 @@ func main() {
 		if err := startEgress(cfg.egress); err != nil {
 			log.Fatalf("egress: %v", err)
 		}
+	} else {
+		// A box that ran a farm session before keeps no offline shims for this one.
+		clearEgress()
 	}
 	ln, err := net.Listen("tcp", cfg.listen)
 	if err != nil {
@@ -789,7 +792,7 @@ func walkPaths(roots []string, max int) ([]proto.StatEntry, bool) {
 const baselineFile = "/opt/omnirush/state/baseline.gz"
 
 // Folders never walked for changes: kernel and runtime state, our own files.
-var walkSkip = []string{"/proc", "/sys", "/dev", "/run", "/opt/omnirush"}
+var walkSkip = []string{"/proc", "/sys", "/dev", "/run", "/opt/omnirush", offlineProfile}
 
 type sig struct {
 	Mt, Ct, Size int64

@@ -25,6 +25,7 @@ import path from "node:path";
 
 import { BOX_HEADER } from "../model-modes/model-modes.mjs";
 import { BOX_NOTE, OFFLINE_NOTE, desktopProjects, engineDirs, FILE_TOOLS, keyOf, record, toolPaths, within } from "../box/plugin-lib.js";
+import { stockMode } from "../stock-mode/stock-mode.mjs";
 
 /** The engine client's one call used here: a chat's parent (a sub-agent's chat has one). */
 type SessionReader = { session: { get: (options: { path: { id: string } }) => Promise<{ data?: { parentID?: string } | null } | undefined> } };
@@ -91,7 +92,8 @@ export const OmniRushBox = async ({ directory, client }: { directory?: string; c
       }
       // Stock mode (stock-mode.mjs, the CLI's opencode-box-plugin.js): the system prompt stays stock apart from its environment lines,
       // and the one line that says the box is offline (farm runs' boxes are: boxd egress.go).
-      if (process.env.OMNIRUSH_FARM === "1") {
+      // stockMode, as the box's egress (bwrap.ts boxEgress) reads it: the two never disagree.
+      if (stockMode(process.env)) {
         output.system.push(OFFLINE_NOTE);
         return;
       }

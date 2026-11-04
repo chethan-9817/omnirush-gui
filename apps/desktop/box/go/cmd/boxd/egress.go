@@ -73,6 +73,10 @@ func offlineLine(host string) string {
 // offlineBin: the shims' folder, first on the commands' PATH (/opt/omnirush is left out of snapshots).
 var offlineBin = "/opt/omnirush/offline/bin"
 
+// offlineProfile puts offlineBin back in front of PATH in login shells (/etc/profile resets PATH);
+// left out of snapshots like offlineBin.
+var offlineProfile = "/etc/profile.d/omnirush-offline.sh"
+
 // unshareNet makes the calling thread's network namespace (a variable: tests make it fail).
 var unshareNet = func() error { return syscall.Unshare(syscall.CLONE_NEWNET) }
 
@@ -125,6 +129,9 @@ func startEgress(mode string) error {
 	}
 	if err := writeShims(offlineBin); err != nil {
 		return fmt.Errorf("shims: %w", err)
+	}
+	if err := writeProfile(offlineProfile, offlineBin); err != nil {
+		return fmt.Errorf("login shells: %w", err)
 	}
 	egressNS = m.ns
 	egressPort.Store(int64(m.ln.Addr().(*net.TCPAddr).Port))
@@ -269,6 +276,22 @@ func netProc() string {
 		return "/proc/net/"
 	}
 	return "/proc/thread-self/net/"
+}
+
+// writeProfile writes the login shells' PATH line (sh, bash; Debian's /etc/profile reads profile.d).
+func writeProfile(file, dir string) error {
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return err
+	}
+	text := "# OmniRush (farm runs; boxd egress.go): the offline shims first on PATH in login shells too.\n" +
+		"case \":$PATH:\" in *:" + dir + ":*) ;; *) PATH=\"" + dir + ":$PATH\"; export PATH ;; esac\n"
+	return os.WriteFile(file, []byte(text), 0o644)
+}
+
+// clearEgress removes what a farm start left in the box (a normal start after one).
+func clearEgress() {
+	_ = os.Remove(offlineProfile)
+	_ = os.RemoveAll(filepath.Dir(offlineBin))
 }
 
 // writeShims puts git, curl and wget into dir: a call to a remote that is not a farm host (nor

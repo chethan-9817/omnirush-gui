@@ -176,3 +176,37 @@ func TestShims(t *testing.T) {
 		}
 	}
 }
+
+func TestOfflineProfile(t *testing.T) {
+	dir := t.TempDir()
+	profile, bin := filepath.Join(dir, "profile.d", "omnirush-offline.sh"), filepath.Join(dir, "offline", "bin")
+	if err := writeShims(bin); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeProfile(profile, bin); err != nil {
+		t.Fatal(err)
+	}
+	for _, sh := range []string{"/bin/sh", "/bin/bash"} {
+		// As /etc/profile leaves it (PATH reset), and when the shims are already first (no second copy).
+		for _, path := range []string{"/usr/local/bin:/usr/bin:/bin", bin + ":/usr/bin:/bin"} {
+			cmd := exec.Command(sh, "-c", `. "$1"; command -v git; echo "$PATH"`, "sh", profile)
+			cmd.Env = []string{"PATH=" + path}
+			out, err := cmd.Output()
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if err != nil || len(lines) != 2 || lines[0] != filepath.Join(bin, "git") || strings.Count(lines[1], bin) != 1 {
+				t.Errorf("%s with PATH=%s: %q %v", sh, path, out, err)
+			}
+		}
+	}
+	old := offlineProfile
+	offlineProfile = profile
+	oldBin := offlineBin
+	offlineBin = bin
+	t.Cleanup(func() { offlineProfile, offlineBin = old, oldBin })
+	clearEgress()
+	for _, p := range []string{profile, bin} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s left after a normal start", p)
+		}
+	}
+}

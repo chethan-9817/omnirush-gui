@@ -64,7 +64,7 @@ const H = HOME_IN_BOX;
 /** Never part of a turn's environment: runtime state, logs, download caches the ledger replays. */
 export const NOISE_PREFIXES = [
   "/run", "/proc", "/sys", "/dev", "/var/log", "/var/cache/apt", "/var/lib/apt/lists", "/var/cache/debconf/templates.dat-old",
-  "/opt/omnirush", "/usr/sbin/docker-init", "/sbin/docker-init", "/var/lib/dpkg/lock", "/var/lib/dpkg/lock-frontend", "/var/cache/ldconfig/aux-cache",
+  "/opt/omnirush", "/etc/profile.d/omnirush-offline.sh", "/usr/sbin/docker-init", "/sbin/docker-init", "/var/lib/dpkg/lock", "/var/lib/dpkg/lock-frontend", "/var/cache/ldconfig/aux-cache",
   `${H}/.cache/pip`, `${H}/.cache/uv`, `${H}/.cache/pre-commit`, `${H}/.cache/yarn`, `${H}/.cache/go-build`, `${H}/.cache/pnpm`,
   `${H}/.npm/_cacache`, `${H}/.npm/_logs`, `${H}/.npm/_update-notifier-last-checked`, `${H}/.npm/_npx`,
   `${H}/.bun/install/cache`, `${H}/.yarn/berry/cache`, `${H}/.local/share/pnpm/store`, `${H}/.cargo/registry/cache`, "/usr/local/cargo/registry/cache",
