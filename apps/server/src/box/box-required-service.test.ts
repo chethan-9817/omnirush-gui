@@ -392,3 +392,28 @@ describe("required sandbox: a stopped send", () => {
     expect((Reflect.get(boxes, "nativeChats") as Map<string, string>).has("ses_req_undo_old")).toBe(true);
   });
 });
+
+describe("farm runs (stock mode): the box or no prompt", () => {
+  test("box off, host-only project, no backend, a remote workspace: refused with one line; other runs never", async () => {
+    const state = await temp("farm-state");
+    rememberServerDefault(state, { local_box: { default: "on", required: true } });
+    const root = await temp("farm-proj");
+    const local: BoxWorkspace = { id: "w1", path: root, workspaceType: "local" };
+    const line = (why: string) => `farm mode runs only in the sandbox (it keeps the session offline); this machine has no usable sandbox (${why})`;
+    const farm = { ...NO_RUNTIME, OMNIRUSH_FARM: "1" };
+    expect(await service({ stateDir: state, workspaces: [local], env: { ...farm, OMNIRUSH_BOX: "0" } }).farmRefusal(local)).toBe(line("box off: OMNIRUSH_BOX=0"));
+    const none = await service({ stateDir: state, workspaces: [local], env: { ...farm, OMNIRUSH_FARM: "true" } }).farmRefusal(local);
+    expect(none).toStartWith(line("no backend that keeps it offline").slice(0, -1));
+    const win = await temp("farm-win");
+    await writeFile(join(win, "app.vcxproj"), "<Project/>");
+    const winWs: BoxWorkspace = { id: "w2", path: win, workspaceType: "local" };
+    expect(await service({ stateDir: state, workspaces: [winWs], env: farm, platform: "win32" }).farmRefusal(winWs)).toBe(line("host-only project"));
+    const remote: BoxWorkspace = { id: "w3", path: "/remote", workspaceType: "remote" };
+    expect(await service({ stateDir: state, workspaces: [remote], env: farm }).farmRefusal(remote)).toBe(line("not a local project"));
+    // Not a farm run: nothing refused, whatever the box can do here.
+    for (const env of [{ ...NO_RUNTIME, OMNIRUSH_BOX: "0" }, NO_RUNTIME, { ...NO_RUNTIME, OMNIRUSH_FARM: "0" }]) {
+      expect(await service({ stateDir: state, workspaces: [local, remote], env }).farmRefusal(local)).toBeNull();
+      expect(await service({ stateDir: state, workspaces: [local, remote], env }).farmRefusal(remote)).toBeNull();
+    }
+  });
+});

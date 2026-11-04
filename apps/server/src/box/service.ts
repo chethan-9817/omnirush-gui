@@ -39,6 +39,7 @@ import { desktopText, hostOnlyProject, requiredLaunch, shadowsApply, shadowsNoti
 import { cachedWindowsChecks, classifySetup, linuxAllow, resumeWinSetup, saveSetupState, setupState, windowsInstall, windowsRestart, windowsUpdate, type BoxSetup } from "./setup.js";
 import type { BoxInstallLogPaths } from "./install-log.js";
 import { DESKTOP_PROJECTS_FILE } from "./plugin-lib.js";
+import { stockMode } from "../stock-mode/stock-mode.mjs";
 import { BUILDATHON_OFFER_NOTICE, buildathonBoxFor, buildathonProjectsFile, LESS_REPRO_NOTICE } from "../buildathon-repro.js";
 import { layerSizes, pullProgress, type PullProgress } from "./pull-progress.js";
 import { detectRuntime, type BackendAlternative, type DetectOptions, type RuntimeInfo, type RuntimeResult } from "./runtime.js";
@@ -1018,6 +1019,29 @@ export class BoxService {
    * that cannot be had), or null: it keeps the box even when its project's
    * box was turned off since, and is refused only when the box truly cannot run.
    */
+  /**
+   * Farm runs (stock mode) run only in the box, which keeps them offline (boxd egress.go): a prompt of a
+   * workspace that cannot use it is refused (the line to refuse with), before any model call or upload.
+   * Null: not a farm run, or the box is there. CLI: src/box/launch.js farmRefusal / farmGate.
+   */
+  async farmRefusal(workspace: BoxWorkspace): Promise<string | null> {
+    if (!stockMode(this.env)) return null;
+    if (workspace.workspaceType !== "local") return farmLine("not a local project");
+    const mode = await this.mode(workspace).catch(() => null);
+    if (mode && !mode.on) {
+      if (["0", "off", "false"].includes(String(this.env.OMNIRUSH_BOX ?? "").trim().toLowerCase())) return farmLine("box off: OMNIRUSH_BOX=0");
+      return farmLine(mode.source === "host-only" ? "host-only project" : `box off: ${mode.source}`);
+    }
+    const run = await this.ensure(workspace).catch(() => null);
+    if (run && !run.native) return null;
+    const project = this.projects.get(boxKey(boxRoot(workspace)));
+    const why = project?.why;
+    const reason = project?.lastRuntime && !project.lastRuntime.ok ? project.lastRuntime.reason : null;
+    if (why?.reason === "no_runtime") return farmLine(`no backend that keeps it offline${reason ? `: ${String(reason).slice(0, 200)}` : ""}`);
+    if (why?.reason === "downloading") return farmLine("the sandbox image is still downloading; try again when it is done");
+    return farmLine(project?.notice ? String(project.notice).slice(0, 200) : "the sandbox cannot start on this computer right now");
+  }
+
   async pinnedBoxUnavailable(sessionId: string, workspace: BoxWorkspace): Promise<string | null> {
     if (workspace.workspaceType !== "local" || !this.chatPin(sessionId)?.box) return null;
     const run = await this.ensure(workspace, { keep: true }).catch(() => null);
@@ -1097,4 +1121,9 @@ export class BoxService {
     await Promise.race([work, new Promise((resolve) => setTimeout(resolve, budgetMs).unref?.())]);
     return done;
   }
+}
+
+/** The one line a farm run that cannot use the box is refused with. CLI: src/box/launch.js farmLine. */
+export function farmLine(why: string): string {
+  return `farm mode runs only in the sandbox (it keeps the session offline); this machine has no usable sandbox (${why})`;
 }

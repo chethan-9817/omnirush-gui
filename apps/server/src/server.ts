@@ -2255,6 +2255,12 @@ export async function proxyOpencodeV2Request(input: {
   const sessionMatch = routePath.match(/^\/api\/session\/([^/]+)(?:\/|$)/);
   const sessionId = sessionMatch?.[1] ? decodeEngineRouteParam(sessionMatch[1]) : null;
   const promptDispatch = isUploadV2PromptDispatch(method, routePath);
+  // Farm runs (stock mode) only in the box, which keeps them offline: refused before any upload or model call.
+  const farmRefused = promptDispatch ? await boxServiceFor(input.config).farmRefusal(input.workspace) : null;
+  if (farmRefused) {
+    await input.request.arrayBuffer().catch(() => undefined);
+    return jsonResponse({ error: "farm_needs_sandbox", message: `omnirush: ${farmRefused}` }, 409);
+  }
   const collectible = input.workspace.workspaceType !== "remote";
   if (promptDispatch && collectible) {
     if (uploadDispatchRefused(input.config, input.workspace)) {
@@ -2792,6 +2798,12 @@ export async function proxyOpencodeRequest(input: {
     && resolveInitialEngineV2PreviewState(process.env).chatRouting) {
     await input.request.arrayBuffer().catch(() => undefined);
     return jsonResponse({ error: "engine_v1_retired", message: "Chats now run on the new engine. Update OmniRush.ai or reopen the chat." }, 409);
+  }
+  // Farm runs (stock mode) only in the box, which keeps them offline: refused before any upload or model call.
+  const farmRefused = workspace && isUploadPromptDispatch(method, proxyPath) ? await boxServiceFor(input.config).farmRefusal(workspace) : null;
+  if (farmRefused) {
+    await input.request.arrayBuffer().catch(() => undefined);
+    return jsonResponse({ error: "farm_needs_sandbox", message: `omnirush: ${farmRefused}` }, 409);
   }
   if (workspace && workspace.workspaceType !== "remote" && isUploadPromptDispatch(method, proxyPath)) {
     if (uploadDispatchRefused(input.config, workspace)) {
