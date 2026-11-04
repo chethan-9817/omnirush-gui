@@ -35,6 +35,7 @@ import * as client from "./client.js";
 import type { BoxEndpoint, BoxStat } from "./client.js";
 import { DEPS_MAX_BYTES, FILE_MAX_BYTES, HOME_IN_BOX, RECORD_SCHEMA, RUN_DIR, SHIMS_DIR, TAR_MAX_BYTES, boxHome, boxKey, containerName, containerRoot, firstLine, readJson, readRecord, recordFile, runDir, writeJson, type BoxInstallLog, type BoxLog, type BoxRecord, type BoxRuntime } from "./common.js";
 import { driverFor } from "./backends/index.js";
+import { boxEgress } from "./backends/bwrap.js";
 import type { ListedBox, SpawnLike } from "./backends/types.js";
 import { detectStack, imageFor, type BoxImage, type ImagePins } from "./images.js";
 import { runCommand, type RunCommand, type RunOptions } from "./run.js";
@@ -63,7 +64,7 @@ const H = HOME_IN_BOX;
 /** Never part of a turn's environment: runtime state, logs, download caches the ledger replays. */
 export const NOISE_PREFIXES = [
   "/run", "/proc", "/sys", "/dev", "/var/log", "/var/cache/apt", "/var/lib/apt/lists", "/var/cache/debconf/templates.dat-old",
-  "/opt/omnirush", "/usr/sbin/docker-init", "/sbin/docker-init", "/var/lib/dpkg/lock", "/var/lib/dpkg/lock-frontend", "/var/cache/ldconfig/aux-cache",
+  "/opt/omnirush", "/etc/profile.d/omnirush-offline.sh", "/usr/sbin/docker-init", "/sbin/docker-init", "/var/lib/dpkg/lock", "/var/lib/dpkg/lock-frontend", "/var/cache/ldconfig/aux-cache",
   `${H}/.cache/pip`, `${H}/.cache/uv`, `${H}/.cache/pre-commit`, `${H}/.cache/yarn`, `${H}/.cache/go-build`, `${H}/.cache/pnpm`,
   `${H}/.npm/_cacache`, `${H}/.npm/_logs`, `${H}/.npm/_update-notifier-last-checked`, `${H}/.npm/_npx`,
   `${H}/.bun/install/cache`, `${H}/.yarn/berry/cache`, `${H}/.local/share/pnpm/store`, `${H}/.cargo/registry/cache`, "/usr/local/cargo/registry/cache",
@@ -251,7 +252,7 @@ export async function openBox({ root, runtime, env = process.env, platform = pro
         if (!identity) await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
-    if (!identity) return box.fail("the sandbox helper did not answer", onState);
+    if (!identity) return box.fail(`the sandbox helper did not answer${boxEgress(env) ? " (farm mode: it does not start where the box cannot be kept offline)" : ""}`, onState);
     box.identity = identity;
     if (shims) await box.installShims().catch((error) => log("warn", "box wrappers not installed", { error: String(error?.message || error) }));
     else if (pkglog) {
@@ -414,12 +415,17 @@ export class Box {
     this.imageId = imageId;
   }
 
+  execFallback(): boolean {
+    return Boolean(driverFor(this.runtime).execFallback) && !boxEgress(this.env);
+  }
+
   /** The record boxsh reads (boxes/<key>.json). */
   writeRecord(): void {
-    const fallback = driverFor(this.runtime).execFallback;
+    const fallback = this.execFallback();
     const record: BoxRecord = {
       v: 1, key: this.key, root: this.root, croot: this.croot, container: this.name, backend: this.runtime.backend ?? this.runtime.name ?? "",
-      // boxsh's fallback when boxd does not answer: `<runtime> exec` (container engines and wslc only).
+      // boxsh's fallback when boxd does not answer: `<runtime> exec` (container engines and wslc only; never
+      // in farm runs, where it would run the command outside boxd's offline network).
       runtime: fallback ? this.runtime.bin ?? "" : "", runtime_args: fallback ? this.runtime.prefix ?? [] : [],
       host: this.endpoint?.host ?? "127.0.0.1", port: this.endpoint?.port ?? 0, token: this.endpoint?.token ?? "",
       state: this.state, error: this.error ?? "", uid: this.uid ?? 0, gid: this.gid ?? 0, home: HOME_IN_BOX, shell: "/bin/bash",

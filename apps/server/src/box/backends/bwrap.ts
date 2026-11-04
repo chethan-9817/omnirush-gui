@@ -10,7 +10,8 @@
 // unpacks it (~/.omnirush/box/bwrap/store), and runs each project's box as
 // that root filesystem under a per-project overlay upper layer
 // (~/.omnirush/box/bwrap/boxes/<key>), in its own user, mount, PID, IPC and
-// UTS namespaces, on the host's network. The upper layer stays on disk, so
+// UTS namespaces, on the host's network (farm runs: boxd runs the agent's commands in a network of
+// their own with only the package registries reachable, box/go/cmd/boxd/egress.go). The upper layer stays on disk, so
 // installs survive restarts; boxd is the same helper the containers run.
 //
 // Ubuntu 23.10+ blocks unprivileged user namespaces through AppArmor
@@ -23,6 +24,7 @@ import path from "node:path";
 
 import { GOARCH, RUN_DIR, SHIMS_DIR, containerName, containerRoot, helperPath, newToken, readJson, writeJson, type BoxInstallLog, type BoxRuntime } from "../common.js";
 import { REQUIRED_RULES, shadowId, type ShadowPlan } from "../required.js";
+import { farmRun } from "../../stock-mode/stock-mode.mjs";
 import { runCommand, type RunCommand, type RunOptions } from "../run.js";
 import type { RuntimeResult } from "../runtime.js";
 import { YOUNG_IMAGE_MS, removableImage, removeTree, staleEntries } from "../retention.mjs";
@@ -157,12 +159,21 @@ async function pull(runtime: BoxRuntime, image: { pull: string }, { run = runCom
   return out?.ok ? { ok: true } : { ok: false, error: String(out?.error || res.stderr || `boxrun pull exited ${res.code}`).slice(0, 300) };
 }
 
+/**
+ * The box's egress: "farm" in farm runs (an asked OMNIRUSH_FARM, stock-mode.mjs farmRun; not an event's stock mode): boxd gives the agent's commands no internet
+ * but the package registries (box/go/cmd/boxd/egress.go). null: the box's network as is. CLI: the same.
+ */
+export function boxEgress(env: Env = process.env): "farm" | null {
+  return farmRun(env) ? "farm" : null;
+}
+
 /** boxd's environment in a box (what `docker create -e` gives the containers). */
-export function boxdEnv({ token, croot, idleMinutes = IDLE_MINUTES, listen = "127.0.0.1:0" }: { token: string; croot: string; idleMinutes?: number; listen?: string }): string[] {
+export function boxdEnv({ token, croot, idleMinutes = IDLE_MINUTES, listen = "127.0.0.1:0", egress = null }: { token: string; croot: string; idleMinutes?: number; listen?: string; egress?: string | null }): string[] {
   return [
     `BOXD_TOKEN=${token}`, "BOXD_UID=0", "BOXD_GID=0", "BOXD_HOME=/root", `BOXD_ROOT=${croot}`,
     `BOXD_ENV_FILE=${RUN_DIR}/env`, `BOXD_LISTEN=${listen}`, `BOXD_PORT_FILE=${RUN_DIR}/boxd.port`, `BOXD_IDLE_EXIT=${idleMinutes}`,
     "LANG=C.UTF-8", "DEBIAN_FRONTEND=noninteractive",
+    ...(egress ? [`BOXD_EGRESS=${egress}`] : []),
   ];
 }
 
@@ -175,12 +186,12 @@ export function lazyShadowRules(): Array<{ dir: string; markers: string[] }> {
 }
 
 /** `boxrun up` arguments for a project's box. */
-export function upArgs({ box, store, image, boxd, portFile, root, croot, runFolder, shims = null, pkglog = null, token, bwrap = null, idleMinutes = IDLE_MINUTES, listen, platform = "linux", mapPath = (p: string) => p, shadows = null, shadowStore = null }: { box: string; store: string; image: string; boxd: string; portFile: string; root: string; croot: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "root"> | null; token: string; bwrap?: string | null; idleMinutes?: number; listen?: string; platform?: NodeJS.Platform; mapPath?: (p: string) => string; shadows?: Pick<ShadowPlan, "binds"> | null; shadowStore?: string | null }): string[] {
+export function upArgs({ box, store, image, boxd, portFile, root, croot, runFolder, shims = null, pkglog = null, token, bwrap = null, idleMinutes = IDLE_MINUTES, listen, platform = "linux", mapPath = (p: string) => p, shadows = null, shadowStore = null, egress = null }: { box: string; store: string; image: string; boxd: string; portFile: string; root: string; croot: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "root"> | null; token: string; bwrap?: string | null; idleMinutes?: number; listen?: string; platform?: NodeJS.Platform; mapPath?: (p: string) => string; shadows?: Pick<ShadowPlan, "binds"> | null; shadowStore?: string | null; egress?: string | null }): string[] {
   const args = ["up", "--box", box, "--store", store, "--image", image, "--boxd", boxd, "--port-file", portFile,
     "--bind", `${mapPath(root)}=${croot}`, "--bind", `${mapPath(runFolder)}=${RUN_DIR}`];
   if (shims) args.push("--ro-bind", `${mapPath(shims)}=${SHIMS_DIR}-src`);
   if (pkglog) args.push("--bind", `${mapPath(pkglog.root)}=${containerRoot(pkglog.root, platform)}`);
-  for (const kv of boxdEnv({ token, croot, idleMinutes, ...(listen ? { listen } : {}) })) args.push("--env", kv);
+  for (const kv of boxdEnv({ token, croot, idleMinutes, egress, ...(listen ? { listen } : {}) })) args.push("--env", kv);
   if (bwrap) args.push("--bwrap", bwrap);
   // The box's own build folders (required.ts shadowPlan; backends whose boxrun runs as root):
   // the per-box store on the backend's own disk, and each folder bound from it (boxrun init Binds).
@@ -224,7 +235,7 @@ async function open(ctx: OpenContext): Promise<Opened> {
   if (!boxd) return { ok: false, error: "the sandbox helper boxd is missing from this install" };
   const portFile = path.join(runFolder, "boxd.port");
   const idle = Number(env.OMNIRUSH_BOX_IDLE_MIN) > 0 ? Number(env.OMNIRUSH_BOX_IDLE_MIN) : IDLE_MINUTES;
-  const args = upArgs({ box: boxDir(home, key), store: storeDir(home), image: meta.image, boxd, portFile, root, croot, runFolder, shims, pkglog, token: meta.token, bwrap: runtime.bwrap ?? null, idleMinutes: idle });
+  const args = upArgs({ box: boxDir(home, key), store: storeDir(home), image: meta.image, boxd, portFile, root, croot, runFolder, shims, pkglog, token: meta.token, bwrap: runtime.bwrap ?? null, idleMinutes: idle, egress: boxEgress(env) });
   // OMNIRUSH_BOX_OVERLAY=fuse: fuse-overlayfs only (a kernel without overlayfs in user namespaces, or a test of one).
   if (String(env.OMNIRUSH_BOX_OVERLAY || "").toLowerCase() === "fuse") args.push("--overlay", "fuse");
   const res = await run(runtime.bin, args, { timeoutMs: 45_000, env: { PATH: env.PATH || "/usr/bin:/bin", USER: env.USER || "" } });

@@ -78,6 +78,9 @@ export function toolPaths(tool: string, args: Record<string, unknown> = {}): str
 }
 
 // `shadows`: the record's shadows_note (macOS/Windows hosts: the box's own node_modules, .venv, ...), one more line.
+/** The one line a farm run's system prompt gets (its box is offline: boxd egress.go). CLI: the same. */
+export const OFFLINE_NOTE = "This session is offline: the shell cannot reach the internet, except package installs (npm/pnpm/yarn, pip/uv, cargo, go, composer). Mock external services and APIs instead of calling them.";
+
 export const BOX_NOTE = (root: string, uid = 0, croot = root, shadows: unknown = null): string => [
   `Sandbox: shell commands run in a Linux (Debian) container, ${uid === 0 ? "as root" : "as a user with passwordless sudo"}, with HOME=/root.`,
   croot && croot !== root

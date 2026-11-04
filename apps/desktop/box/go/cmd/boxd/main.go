@@ -20,6 +20,7 @@
 //	BOXD_IDLE_EXIT  minutes with no request after which it exits (0: never; the
 //	                bubblewrap and WSL boxes, which have no engine to keep them)
 //	BOXD_SHADOWS  the build folders boxrun init shadowed (JSON list; shadows.go)
+//	BOXD_EGRESS  "farm": commands get no internet but the package registries (egress.go)
 package main
 
 import (
@@ -65,6 +66,7 @@ type config struct {
 	idle    time.Duration
 	baseEnv []string
 	shadows string
+	egress  string
 }
 
 // snapshotGate lets a snapshot read the files with no new command starting
@@ -152,6 +154,15 @@ func main() {
 		start := time.Now()
 		n, err := writeBaseline()
 		log.Printf("baseline: %d entries in %v (err=%v)", n, time.Since(start), err)
+	}
+	if cfg.egress != "" {
+		// Before the port file: no command starts on a box whose network is not set yet.
+		if err := startEgress(cfg.egress); err != nil {
+			log.Fatalf("egress: %v", err)
+		}
+	} else {
+		// A box that ran a farm session before keeps no offline shims for this one.
+		clearEgress()
 	}
 	ln, err := net.Listen("tcp", cfg.listen)
 	if err != nil {
@@ -246,6 +257,7 @@ func loadConfig() config {
 		portFile: os.Getenv("BOXD_PORT_FILE"),
 		idle:    time.Duration(atoi("BOXD_IDLE_EXIT")) * time.Minute,
 		shadows: os.Getenv("BOXD_SHADOWS"),
+		egress:  os.Getenv("BOXD_EGRESS"),
 	}
 	if cfg.shell == "" {
 		cfg.shell = "/bin/bash"
@@ -259,7 +271,7 @@ func loadConfig() config {
 		}
 		cfg.baseEnv = append(cfg.baseEnv, kv)
 	}
-	for _, k := range []string{"BOXD_TOKEN", "BOXD_LISTEN", "BOXD_UID", "BOXD_GID", "BOXD_HOME", "BOXD_ROOT", "BOXD_PATH", "BOXD_ENV_FILE", "BOXD_SHELL", "BOXD_PORT_FILE", "BOXD_IDLE_EXIT", "BOXD_SHADOWS"} {
+	for _, k := range []string{"BOXD_TOKEN", "BOXD_LISTEN", "BOXD_UID", "BOXD_GID", "BOXD_HOME", "BOXD_ROOT", "BOXD_PATH", "BOXD_ENV_FILE", "BOXD_SHELL", "BOXD_PORT_FILE", "BOXD_IDLE_EXIT", "BOXD_SHADOWS", "BOXD_EGRESS"} {
 		_ = os.Unsetenv(k)
 	}
 	if cfg.token == "" {
@@ -534,6 +546,9 @@ func commandEnv(cfg config, extra map[string]string) []string {
 	for k, v := range extra {
 		set(k, v)
 	}
+	for k, v := range egressEnv() {
+		set(k, v)
+	}
 	delete(env, "BOXD_CHOWN_DIRS")
 	// The package-manager wrappers' folder, written by the launcher after the start.
 	if pre, ok := env["BOXD_PATH_PREFIX"]; ok {
@@ -544,6 +559,9 @@ func commandEnv(cfg config, extra map[string]string) []string {
 	}
 	if cfg.pathPre != "" {
 		set("PATH", cfg.pathPre+":"+env["PATH"])
+	}
+	if egressPort.Load() > 0 {
+		set("PATH", offlineBin+":"+env["PATH"])
 	}
 	out := make([]string, 0, len(order))
 	for _, k := range order {
@@ -598,7 +616,7 @@ func runExec(cfg config, c *conn, req proto.Request, start time.Time) {
 		return
 	}
 	cmd.Stdout, cmd.Stderr = outW, errW
-	if err := cmd.Start(); err != nil {
+	if err := inNet(cmd.Start); err != nil {
 		outW.Close()
 		errW.Close()
 		outR.Close()
@@ -774,7 +792,7 @@ func walkPaths(roots []string, max int) ([]proto.StatEntry, bool) {
 const baselineFile = "/opt/omnirush/state/baseline.gz"
 
 // Folders never walked for changes: kernel and runtime state, our own files.
-var walkSkip = []string{"/proc", "/sys", "/dev", "/run", "/opt/omnirush"}
+var walkSkip = []string{"/proc", "/sys", "/dev", "/run", "/opt/omnirush", offlineProfile}
 
 type sig struct {
 	Mt, Ct, Size int64

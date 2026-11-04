@@ -33,6 +33,7 @@ import { versionAtLeast } from "./shared.js";
 import { removableImage, removalTarget } from "../retention.mjs";
 import type { BoxDriver, OpenContext, Opened, PresentImage, Removed } from "./types.js";
 import { ENABLE_HINT, decodeWsl, wslCall, wslExe } from "./wsl.js";
+import { boxEgress } from "./bwrap.js";
 
 type Env = NodeJS.ProcessEnv;
 type Row = Record<string, unknown>;
@@ -122,7 +123,7 @@ export function wslcResources({ env = process.env, cpus = os.cpus().length, memo
   return ["--cpus", String(c), "-m", m];
 }
 
-export function createWslcArgs({ name, key, root, croot, image, runFolder, shims = null, pkglog = null, token, port, env = process.env }: { name: string; key: string; root: string; croot: string; image: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "root"> | null; token: string; port: number; env?: Env }): string[] {
+export function createWslcArgs({ name, key, root, croot, image, runFolder, shims = null, pkglog = null, token, port, env = process.env, egress = null }: { name: string; key: string; root: string; croot: string; image: string; runFolder: string; shims?: string | null; pkglog?: Pick<BoxInstallLog, "root"> | null; token: string; port: number; env?: Env; egress?: string | null }): string[] {
   return [
     "container", "create", "--name", name,
     "--label", `${LABEL}=1`, "--label", `${LABEL}.key=${key}`, "--label", `${LABEL}.root=${root}`, "--label", `${LABEL}.version=1`, "--label", `${LABEL}.port=${port}`,
@@ -135,6 +136,8 @@ export function createWslcArgs({ name, key, root, croot, image, runFolder, shims
     "-p", `127.0.0.1:${port}:${BOX_PORT}`,
     "-e", `BOXD_TOKEN=${token}`, "-e", "BOXD_UID=0", "-e", "BOXD_GID=0", "-e", `BOXD_HOME=${HOME_IN_BOX}`, "-e", `BOXD_ROOT=${croot}`, "-e", `BOXD_ENV_FILE=${RUN_DIR}/env`,
     "-e", "LANG=C.UTF-8", "-e", "DEBIAN_FRONTEND=noninteractive",
+    // Farm runs (bwrap.ts boxEgress): boxd's egress, and a label so a box made the other way is made again.
+    ...(egress ? ["-e", `BOXD_EGRESS=${egress}`, "--label", `${LABEL}.egress=${egress}`] : []),
     "-w", croot,
     ...wslcResources({ env }),
     "--entrypoint", "/opt/omnirush/bin/boxd",
@@ -188,6 +191,14 @@ async function open(ctx: OpenContext): Promise<Opened> {
   let info = await row(runtime, name, { run });
   const labels = labelsOf(info?.Labels);
   if (info && labels[`${LABEL}.root`] && labels[`${LABEL}.root`] !== root) return { ok: false, error: `container ${name} belongs to another folder` };
+  const egress = boxEgress(env);
+  if (info && (labels[`${LABEL}.egress`] ?? null) !== egress) {
+    // A box made for the other kind of run (farm egress or not): its network is fixed at create.
+    log("info", "box made again for this run's network", { key, egress });
+    const gone = await wslc(runtime, ["container", "remove", "--force", name], { run, timeoutMs: 60_000 });
+    if (gone.code !== 0) return { ok: false, error: `could not replace the sandbox: ${firstLine(gone.stderr) || firstLine(gone.stdout)}` };
+    info = null;
+  }
   const placed = placeBoxd(runFolder, env, runtime.arch || "amd64");
   if (placed) return { ok: false, error: placed };
   const tokenFile = path.join(runFolder, "box-token");
@@ -205,7 +216,7 @@ async function open(ctx: OpenContext): Promise<Opened> {
     const token = newToken();
     writeFileSync(tokenFile, token, { mode: 0o600 });
     const port = await freePort();
-    const made = await wslc(runtime, createWslcArgs({ name, key, root, croot, image: image.pull, runFolder, shims, pkglog, token, port, env }), { run, timeoutMs: 120_000 });
+    const made = await wslc(runtime, createWslcArgs({ name, key, root, croot, image: image.pull, runFolder, shims, pkglog, token, port, env, egress }), { run, timeoutMs: 120_000 });
     if (made.code !== 0) return { ok: false, error: `could not create the sandbox: ${firstLine(made.stderr) || firstLine(made.stdout)}` };
     created = { ref: image.ref, pull: image.pull, digest: image.digest || present.digest, id: present.id, stack: image.stack };
     log("info", "box created", { key, image: image.pull, stack: image.stack, backend: "wslc" });

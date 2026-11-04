@@ -27,7 +27,7 @@ import path from "node:path";
 import { runCommand, type RunCommand } from "../run.js";
 import { CACHE_FAIL_MS, CACHE_OK_MS, candidates, isWsl, probe as probeContainer, probeWsl, wslLauncher, type BackendAlternative, type DetectOptions, type RuntimeFailure, type RuntimeInfo, type RuntimeResult, type RuntimeTried } from "../runtime.js";
 import { appleDriver, probeApple } from "./apple.js";
-import { bwrapDriver, probeBwrap } from "./bwrap.js";
+import { boxEgress, bwrapDriver, probeBwrap } from "./bwrap.js";
 import { containerDriver } from "./container.js";
 import { limaDriver, probeLima } from "./lima.js";
 import type { BoxDriver } from "./types.js";
@@ -57,6 +57,13 @@ export const OPT_IN: Partial<Record<NodeJS.Platform, string[]>> = { darwin: ["ap
  * it the order is the one above, and the VM runs only when chosen by name.
  */
 export const REQUIRED_FIRST: Partial<Record<NodeJS.Platform, string[]>> = { darwin: ["lima"] };
+
+/**
+ * Farm runs (bwrap.ts boxEgress): only the backends whose boxd gets BOXD_EGRESS and runs where it
+ * can make the commands' network (boxrun's boxes; wslc when its container allows it), in this
+ * order: the WSL distro, which always can, before wslc. boxd refuses to start where it cannot. CLI: the same.
+ */
+export const EGRESS_BACKENDS = ["bwrap", "lima", "wsl", "wslc"];
 
 /** What the backend setting takes (and what uploads record as sandbox.backend). */
 export const BACKENDS = ["bwrap", "lima", "apple", "wslc", "wsl", "orbstack", "colima", "docker-desktop", "rancher", "docker", "podman", "wsl-engine"] as const;
@@ -231,7 +238,8 @@ export async function detectBackend({ boxHome, env = process.env, platform = pro
   const named = runtimeBackend(legacyRuntime, platform);
   if (named && wanted === "auto") { wanted = normalizeBackend(named); legacyRuntime = ""; }
   const allowList = Array.isArray(allow) ? allow.map(normalizeBackend).filter((id): id is BackendId | "auto" | "native" => Boolean(id)) : null;
-  const key = JSON.stringify([2, platform, wanted, allowList, ...(preferShadows ? ["shadows"] : []), ...(required ? ["required"] : []), legacyRuntime, env.DOCKER_HOST || "", env.PATH || env.Path || "", env.OMNIRUSH_BOX_BWRAP || ""]);
+  const farm = Boolean(boxEgress(env));
+  const key = JSON.stringify([2, platform, wanted, allowList, ...(preferShadows ? ["shadows"] : []), ...(required ? ["required"] : []), ...(farm ? ["farm"] : []), legacyRuntime, env.DOCKER_HOST || "", env.PATH || env.Path || "", env.OMNIRUSH_BOX_BWRAP || ""]);
   if (boxHome && !fresh && !all) {
     const cached = readCache(boxHome, now, key);
     if (cached) return { ...cached, cached: true };
@@ -259,6 +267,11 @@ export async function detectBackend({ boxHome, env = process.env, platform = pro
     for (const id of order) if (!allowList.some((allowed) => allowed === id)) skipped.push({ backend: id, name: id, ok: false, reason: "not allowed by the server" });
     order = order.filter((id) => allowList.some((allowed) => allowed === id));
     why += `; the server allows ${allowList.join(", ")}`;
+  }
+  if (farm) {
+    for (const id of order) if (!EGRESS_BACKENDS.includes(id)) skipped.push({ backend: id, name: id, ok: false, reason: "cannot keep a farm session offline" });
+    order = EGRESS_BACKENDS.filter((id) => order.includes(id));
+    why += "; farm mode: the backends that keep the session offline";
   }
   const limit = timeoutMs ? { timeoutMs } : {};
   let containers: Probed[] | null = null;

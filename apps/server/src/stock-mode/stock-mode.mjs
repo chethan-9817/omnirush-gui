@@ -32,6 +32,17 @@ export const STOCK_SWITCHES = Object.freeze({
   OMNIRUSH_INSTALL_LOG: "0",
 });
 
+/**
+ * A farm run: stock mode the launch asked for, never one a hackathon event turned on (the desktop's
+ * events/app-events.mjs applyEventStock sets FARM_RUN_ENV for an asked run only; the CLI's src/stock.js
+ * farmRun is the same). Only farm runs get the offline box, its prompt line and the refusals.
+ */
+export const FARM_RUN_ENV = "OMNIRUSH_FARM_RUN";
+
+export function farmRun(env = process.env) {
+  return env?.[FARM_RUN_ENV] === "1" && stockMode(env);
+}
+
 /** Sets the stock switches in `env` when it asks for stock mode; returns whether it does. */
 export function applyStockSwitches(env = process.env) {
   if (!stockMode(env)) return false;

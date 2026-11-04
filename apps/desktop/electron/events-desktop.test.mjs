@@ -105,3 +105,23 @@ test("window: display values, the restart note, nothing for a plain stock run or
   // Offline (no answer this time): the kept one.
   assert.equal(accountEvents({ connected: true }, { dir, started: { stock: true, event: true }, now: NOW }).events.active[0].name, "BIOS V2");
 });
+
+test("start: the farm-run marker (the offline box) only for stock mode the launch asked for, never an event's", () => {
+  const dir = tmp();
+  accountEvents(status(ME), { dir, started: { stock: false }, now: NOW });
+  // An event turns stock mode on: no marker, and a stray one from the launch env is dropped.
+  const event = { OMNIRUSH_FARM_RUN: "1" };
+  applyEventStock(dir, event, NOW);
+  assert.equal(event.OMNIRUSH_FARM, "1");
+  assert.equal(event.OMNIRUSH_FARM_RUN, undefined);
+  // Asked at launch (with or without an event): a farm run.
+  const asked = { OMNIRUSH_FARM: "1" };
+  applyEventStock(dir, asked, NOW);
+  assert.equal(asked.OMNIRUSH_FARM_RUN, "1");
+  const alone = { OMNIRUSH_FARM: "1" };
+  applyEventStock(tmp(), alone, NOW);
+  assert.equal(alone.OMNIRUSH_FARM_RUN, "1");
+  // A relaunch of an event-only start: still no farm run.
+  applyEventStock(dir, event, NOW);
+  assert.equal(event.OMNIRUSH_FARM_RUN, undefined);
+});
