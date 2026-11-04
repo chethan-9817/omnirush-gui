@@ -97,7 +97,7 @@ function linuxRun(bwrapAnswer: unknown, { podman = true }: { podman?: boolean } 
 describe("box backends: Linux", () => {
   test("farm runs: only backends that keep the box offline; Podman/Docker are skipped, never a silent fallback", async () => {
     const home = tmp();
-    const env = { PATH: "/usr/bin", OMNIRUSH_BOX_BIN_DIR: helperBin(), OMNIRUSH_FARM: "1" };
+    const env = { PATH: "/usr/bin", OMNIRUSH_BOX_BIN_DIR: helperBin(), OMNIRUSH_FARM: "1", OMNIRUSH_FARM_RUN: "1" };
     const farm = await detectBackend({ boxHome: home, platform: "linux", home, env, exists: set(boxrunPath({ env }), "/usr/bin/podman"), run: linuxRun(BWRAP_AA).run, fresh: true, all: true, wsl: false });
     expect(farm.ok).toBe(false);
     expect(farm.alternatives?.find((a) => a.backend === "podman")?.reason).toBe("cannot keep a farm session offline");
@@ -110,7 +110,9 @@ describe("box backends: Linux", () => {
     const runtime = { name: "wslc", backend: "wslc", bin: "wslc.exe" };
     const base = { key: "k", name: "omnirush-box-k", root: home, croot: home, runtime, home, runFolder: home, run: linuxRun(BWRAP_OK).run, log: () => {}, platform: "win32" as const };
     expect(new Box({ ...base, env: {} }).execFallback()).toBe(true);
-    expect(new Box({ ...base, env: { OMNIRUSH_FARM: "1" } }).execFallback()).toBe(false);
+    expect(new Box({ ...base, env: { OMNIRUSH_FARM: "1", OMNIRUSH_FARM_RUN: "1" } }).execFallback()).toBe(false);
+    // A hackathon event's stock mode (no farm-run marker) keeps the fallback, as before.
+    expect(new Box({ ...base, env: { OMNIRUSH_FARM: "1" } }).execFallback()).toBe(true);
   });
 
   test("bubblewrap first when its probe starts a namespace", async () => {
@@ -212,7 +214,10 @@ describe("box backends: Linux", () => {
   test("farm egress: only farm runs give boxd BOXD_EGRESS (bwrap, WSL distro, wslc); other runs keep their exact args", () => {
     expect(boxEgress({})).toBeNull();
     expect(boxEgress({ OMNIRUSH_FARM: "0" })).toBeNull();
-    expect(boxEgress({ OMNIRUSH_FARM: "1" })).toBe("farm");
+    expect(boxEgress({ OMNIRUSH_FARM: "1", OMNIRUSH_FARM_RUN: "1" })).toBe("farm");
+    // A hackathon event's stock mode (OMNIRUSH_FARM without the farm-run marker): the network as is.
+    expect(boxEgress({ OMNIRUSH_FARM: "1" })).toBeNull();
+    expect(boxEgress({ OMNIRUSH_FARM_RUN: "1" })).toBeNull();
     const base = { box: "/b", store: "/s", image: "i", boxd: "/d", portFile: "/p", root: "/r", croot: "/r", runFolder: "/f", token: "t" };
     const plain = upArgs(base);
     expect(upArgs({ ...base, egress: null })).toEqual(plain);

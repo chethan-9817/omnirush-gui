@@ -24,7 +24,7 @@ import path from "node:path";
 
 import { GOARCH, RUN_DIR, SHIMS_DIR, containerName, containerRoot, helperPath, newToken, readJson, writeJson, type BoxInstallLog, type BoxRuntime } from "../common.js";
 import { REQUIRED_RULES, shadowId, type ShadowPlan } from "../required.js";
-import { stockMode } from "../../stock-mode/stock-mode.mjs";
+import { farmRun } from "../../stock-mode/stock-mode.mjs";
 import { runCommand, type RunCommand, type RunOptions } from "../run.js";
 import type { RuntimeResult } from "../runtime.js";
 import { YOUNG_IMAGE_MS, removableImage, removeTree, staleEntries } from "../retention.mjs";
@@ -160,11 +160,11 @@ async function pull(runtime: BoxRuntime, image: { pull: string }, { run = runCom
 }
 
 /**
- * The box's egress: "farm" in farm runs (OMNIRUSH_FARM): boxd gives the agent's commands no internet
+ * The box's egress: "farm" in farm runs (an asked OMNIRUSH_FARM, stock-mode.mjs farmRun; not an event's stock mode): boxd gives the agent's commands no internet
  * but the package registries (box/go/cmd/boxd/egress.go). null: the box's network as is. CLI: the same.
  */
 export function boxEgress(env: Env = process.env): "farm" | null {
-  return stockMode(env) ? "farm" : null;
+  return farmRun(env) ? "farm" : null;
 }
 
 /** boxd's environment in a box (what `docker create -e` gives the containers). */

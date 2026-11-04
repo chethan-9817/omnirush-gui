@@ -11,6 +11,11 @@ import { dateLabel, endsLabel, eventBadge, eventsRecord, parseEvents } from "./e
 
 const FILE = "events.json";
 const STOCK_ENV = "OMNIRUSH_FARM";
+/**
+ * A farm run: stock mode the launch asked for (OMNIRUSH_FARM in the launch env), never one an event turned on.
+ * Only farm runs get the offline box, its prompt line and the refusals (the server's stock-mode.mjs farmRun).
+ */
+export const FARM_RUN_ENV = "OMNIRUSH_FARM_RUN";
 /** Set at start when an event turned the mode on: the window's stock-mode notice stays quiet then. */
 export const EVENT_MODE_ENV = "OMNIRUSH_STOCK_REASON";
 
@@ -44,6 +49,9 @@ export function applyEventStock(dir, env = process.env, now = Date.now()) {
   if (env[EVENT_MODE_ENV] === "event") delete env[STOCK_ENV];
   delete env[EVENT_MODE_ENV];
   const asked = stockMode(env);
+  // Set for an asked run only (a relaunch's or a stray one is dropped otherwise).
+  if (asked) env[FARM_RUN_ENV] = "1";
+  else delete env[FARM_RUN_ENV];
   const event = Boolean(parseEvents(readEventsRecord(dir), now).stock);
   if (event) {
     env[EVENT_MODE_ENV] = asked ? "event-asked" : "event";

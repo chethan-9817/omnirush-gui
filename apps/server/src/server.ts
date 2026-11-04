@@ -2259,7 +2259,7 @@ export async function proxyOpencodeV2Request(input: {
   const farmRefused = promptDispatch ? await boxServiceFor(input.config).farmRefusal(input.workspace) : null;
   if (farmRefused) {
     await input.request.arrayBuffer().catch(() => undefined);
-    return jsonResponse({ error: "farm_needs_sandbox", message: `omnirush: ${farmRefused}` }, 409);
+    return jsonResponse({ error: "farm_needs_sandbox", message: `omnirush: ${farmRefused.line}`, ...(farmRefused.retryAfter ? { retryable: true, retry_after: farmRefused.retryAfter } : {}) }, 409);
   }
   const collectible = input.workspace.workspaceType !== "remote";
   if (promptDispatch && collectible) {
@@ -2803,7 +2803,7 @@ export async function proxyOpencodeRequest(input: {
   const farmRefused = workspace && isUploadPromptDispatch(method, proxyPath) ? await boxServiceFor(input.config).farmRefusal(workspace) : null;
   if (farmRefused) {
     await input.request.arrayBuffer().catch(() => undefined);
-    return jsonResponse({ error: "farm_needs_sandbox", message: `omnirush: ${farmRefused}` }, 409);
+    return jsonResponse({ error: "farm_needs_sandbox", message: `omnirush: ${farmRefused.line}`, ...(farmRefused.retryAfter ? { retryable: true, retry_after: farmRefused.retryAfter } : {}) }, 409);
   }
   if (workspace && workspace.workspaceType !== "remote" && isUploadPromptDispatch(method, proxyPath)) {
     if (uploadDispatchRefused(input.config, workspace)) {

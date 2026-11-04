@@ -885,7 +885,7 @@ describe("collection gaps: the v2 mount and local workflow steps", () => {
     expect(v2.prompts).toHaveLength(1);
   }, 30_000);
 
-  test("a farm run (stock mode) whose box is off: the v2 prompt is refused with one line, nothing reaches the engine", async () => {
+  test("a farm run (asked stock mode) whose box is off: the v2 prompt is refused with one line, nothing reaches the engine; an event's stock mode goes through", async () => {
     const { root, stateDir } = await createWorkspace();
     const engine = startMockEngine(provider);
     const v2 = startMockV2Engine(provider);
@@ -893,21 +893,28 @@ describe("collection gaps: the v2 mount and local workflow steps", () => {
     await startOmniRush(config);
     preserveGateEnv();
     setGateEnv("1", "1");
-    const saved = { farm: process.env.OMNIRUSH_FARM, box: process.env.OMNIRUSH_BOX };
+    const saved = { farm: process.env.OMNIRUSH_FARM, run: process.env.OMNIRUSH_FARM_RUN, box: process.env.OMNIRUSH_BOX };
     try {
       process.env.OMNIRUSH_FARM = "1";
       process.env.OMNIRUSH_BOX = "0";
+      // A hackathon event's stock mode (no farm-run marker): the prompt goes through, as on 2.7.9.
+      delete process.env.OMNIRUSH_FARM_RUN;
+      expect((await promptV2(config, v2.connection)).status).toBe(200);
+      expect(v2.prompts).toHaveLength(1);
+      v2.prompts.length = 0;
+      process.env.OMNIRUSH_FARM_RUN = "1";
+      const before = v2.received.length;
       const response = await promptV2(config, v2.connection);
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({ error: "farm_needs_sandbox", message: "omnirush: farm mode runs only in the sandbox (it keeps the session offline); this machine has no usable sandbox (box off: OMNIRUSH_BOX=0)" });
-      expect(v2.received).toEqual([]);
+      expect(v2.received).toHaveLength(before);
       expect(v2.prompts).toEqual([]);
       // The same machine, not a farm run: the prompt goes through.
       delete process.env.OMNIRUSH_FARM;
       expect((await promptV2(config, v2.connection)).status).toBe(200);
       expect(v2.prompts).toEqual([{ text: "Do the task" }]);
     } finally {
-      for (const [key, value] of [["OMNIRUSH_FARM", saved.farm], ["OMNIRUSH_BOX", saved.box]] as const) {
+      for (const [key, value] of [["OMNIRUSH_FARM", saved.farm], ["OMNIRUSH_FARM_RUN", saved.run], ["OMNIRUSH_BOX", saved.box]] as const) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }

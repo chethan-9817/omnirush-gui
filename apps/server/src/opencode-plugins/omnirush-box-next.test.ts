@@ -70,7 +70,15 @@ test("farm runs: the prompt gets the offline line only (no box note); other runs
   const { root } = project(true);
   const hooks = await engine(root);
   const saved = process.env.OMNIRUSH_FARM;
+  const savedRun = process.env.OMNIRUSH_FARM_RUN;
   try {
+    // A hackathon event's stock mode (no farm-run marker): stock, as before: no box note, no offline line.
+    process.env.OMNIRUSH_FARM = "1";
+    delete process.env.OMNIRUSH_FARM_RUN;
+    const event = { sessionID: "ses_e", system: ["Platform: darwin"] as unknown[] };
+    await hooks.get("context")!(event);
+    expect(event.system).toEqual(["Platform: linux"]);
+    process.env.OMNIRUSH_FARM_RUN = "1";
     for (const on of ["1", "true", "on", "yes"]) {
       process.env.OMNIRUSH_FARM = on;
       const farm = { sessionID: "ses_f", system: ["Platform: darwin"] as unknown[] };
@@ -89,6 +97,8 @@ test("farm runs: the prompt gets the offline line only (no box note); other runs
   } finally {
     if (saved === undefined) delete process.env.OMNIRUSH_FARM;
     else process.env.OMNIRUSH_FARM = saved;
+    if (savedRun === undefined) delete process.env.OMNIRUSH_FARM_RUN;
+    else process.env.OMNIRUSH_FARM_RUN = savedRun;
   }
 });
 
