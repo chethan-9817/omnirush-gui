@@ -622,6 +622,7 @@ type state struct {
 	Started  int64    `json:"started"`
 	Version  string   `json:"version"`
 	Shadows  []string `json:"shadows,omitempty"`
+	Egress   string   `json:"egress,omitempty"` // boxd's BOXD_EGRESS ("" = the box's own network as is)
 }
 
 func readState(box string) *state {
@@ -727,8 +728,10 @@ func cmdUp(args []string) error {
 		*p, _ = filepath.Abs(*p)
 	}
 	start := time.Now()
+	egress := envValue(envs, "BOXD_EGRESS")
+	// A box running with another egress (a farm run on a normal box, or back) starts again.
 	if s := readState(*box); alive(s) {
-		if port := readPort(*portFile); port > 0 && portOpen(port) {
+		if port := readPort(*portFile); port > 0 && portOpen(port) && s.Egress == egress {
 			// A box started by an older boxrun is registered now (best effort).
 			if boxImage(*box) != *image && !strings.ContainsAny(*image, "/\\.") {
 				if unlock, err := (oci.Store{Dir: *store}).Lock(*image); err == nil {
@@ -951,7 +954,7 @@ func cmdUp(args []string) error {
 	}
 	// The mount points init made on the host, kept in the box folder (the box never sees it).
 	recordShadowMade(*box, initInfo.Made)
-	s := state{Pid: cmd.Process.Pid, Port: port, Launcher: mode, IDMap: ids.Mode, Overlay: initInfo.Overlay, Image: *image, Started: time.Now().Unix(), Version: version, Shadows: initInfo.Shadows}
+	s := state{Pid: cmd.Process.Pid, Port: port, Launcher: mode, IDMap: ids.Mode, Overlay: initInfo.Overlay, Image: *image, Started: time.Now().Unix(), Version: version, Shadows: initInfo.Shadows, Egress: egress}
 	_ = writeJSONFile(filepath.Join(*box, "state.json"), s)
 	emit(map[string]any{"ok": true, "reused": false, "pid": s.Pid, "port": port, "launcher": mode, "idmap": ids.Mode, "overlay": s.Overlay, "shadows": nonNil(s.Shadows), "ms": time.Since(start).Milliseconds()})
 	if *foreground {

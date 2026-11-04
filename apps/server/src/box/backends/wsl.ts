@@ -38,7 +38,7 @@ import { runCommand, type RunCommand, type RunResult } from "../run.js";
 import { externalFetch } from "../../server-fetch.js";
 import type { RuntimeResult } from "../runtime.js";
 import bundledPins from "../wsl.json" with { type: "json" };
-import { IDLE_MINUTES, newMeta, upArgs, type BoxMeta } from "./bwrap.js";
+import { IDLE_MINUTES, boxEgress, newMeta, upArgs, type BoxMeta } from "./bwrap.js";
 import { YOUNG_IMAGE_MS, removableImage, removeTree, staleEntries } from "../retention.mjs";
 import { boxshExec, num, parseOut, str } from "./shared.js";
 import type { BoxDriver, OpenContext, Opened, PresentImage, Removed, SpawnLike } from "./types.js";
@@ -402,7 +402,7 @@ async function open(ctx: OpenContext): Promise<Opened> {
   const args = upArgs({
     box: boxPath(key), store: STORE, image: meta.image, boxd: "/opt/omnirush/boxd", portFile: `${wslPath(runFolder)}/boxd.port`,
     root, croot, runFolder, shims, pkglog, token: meta.token, idleMinutes: idle, listen: listenAny ? "0.0.0.0:0" : "127.0.0.1:0",
-    platform: "win32", mapPath: wslPath, shadows, shadowStore: shadows ? `${SHADOW_STORES}/${key}` : null,
+    platform: "win32", mapPath: wslPath, shadows, shadowStore: shadows ? `${SHADOW_STORES}/${key}` : null, egress: boxEgress(env),
   });
   const kept = await startKeeper(runtime, args, { env, ...(spawnImpl ? { spawnImpl } : {}) });
   if (!kept.ok) return { ok: false, error: `could not start the sandbox: ${kept.error}` };

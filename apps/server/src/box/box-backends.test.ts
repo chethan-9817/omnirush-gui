@@ -14,7 +14,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 
 import { OPT_IN, BACKENDS, REQUIRED_FIRST, backendsFor, detectBackend, driverFor, normalizeBackend, ORDER } from "./backends/index.js";
-import { apparmorProfile, boxdEnv, boxrunPath, bwrapCandidates, ENABLED_BWRAP, explainProbe, parseOut, probeBwrap, upArgs } from "./backends/bwrap.js";
+import { apparmorProfile, boxEgress, boxdEnv, boxrunPath, bwrapCandidates, ENABLED_BWRAP, explainProbe, parseOut, probeBwrap, upArgs } from "./backends/bwrap.js";
 import { createAppleArgs, findDigest, macosMajor, parseVersions, probeApple, snapshotInfo, SUPPORTED as APPLE, systemProductVersion } from "./backends/apple.js";
 import { versionAtLeast } from "./backends/shared.js";
 import { decodeWsl, download, ENABLE_HINT, inDistro, parseWslList, probeWslDistro, startKeeper } from "./backends/wsl.js";
@@ -189,6 +189,24 @@ describe("box backends: Linux", () => {
     expect(rememberServerDefault(state, { local_box: { default: "offer", backends: ["bwrap", "docker"] } })).toBe(false);
     rememberServerDefault(state, { local_box: { default: "off" } });
     expect(serverBackends(state)).toBeNull();
+  });
+
+  test("farm egress: only farm runs give boxd BOXD_EGRESS (bwrap, WSL distro, wslc); other runs keep their exact args", () => {
+    expect(boxEgress({})).toBeNull();
+    expect(boxEgress({ OMNIRUSH_FARM: "0" })).toBeNull();
+    expect(boxEgress({ OMNIRUSH_FARM: "1" })).toBe("farm");
+    const base = { box: "/b", store: "/s", image: "i", boxd: "/d", portFile: "/p", root: "/r", croot: "/r", runFolder: "/f", token: "t" };
+    const plain = upArgs(base);
+    expect(upArgs({ ...base, egress: null })).toEqual(plain);
+    expect(plain.some((a) => a.startsWith("BOXD_EGRESS"))).toBe(false);
+    expect(upArgs({ ...base, egress: "farm" })).toEqual([...plain, "--env", "BOXD_EGRESS=farm"]);
+    const wbase = { name: "n", key: "k", root: "C:\\p", croot: "/c/p", image: "img", runFolder: "C:\\r", token: "t", port: 1, env: {} };
+    const wplain = createWslcArgs(wbase);
+    expect(createWslcArgs({ ...wbase, egress: null })).toEqual(wplain);
+    const wfarm = createWslcArgs({ ...wbase, egress: "farm" });
+    expect(wfarm).toContain("BOXD_EGRESS=farm");
+    expect(wfarm).toContain("ai.omnirush.box.egress=farm");
+    expect(wfarm.length).toBe(wplain.length + 4);
   });
 
   test("bwrap box start: the project at its path, the run folder, boxd on loopback with a port file, nothing of $HOME", () => {

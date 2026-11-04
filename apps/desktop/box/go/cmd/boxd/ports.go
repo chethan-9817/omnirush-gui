@@ -45,7 +45,10 @@ const tcpListen = "0A"
 func listeners() []proto.Listener {
 	byPort := map[int]proto.Listener{}
 	for _, file := range procNetFiles {
-		f, err := os.Open(file)
+		var f *os.File
+		var err error
+		// /proc/net is boxd's own network; thread-self/net is the commands' one under farm egress.
+		_ = inNet(func() error { f, err = os.Open(strings.Replace(file, "/proc/net/", netProc(), 1)); return nil })
 		if err != nil {
 			continue
 		}
@@ -175,7 +178,7 @@ func connectPort(c *conn, req proto.Request, start time.Time) {
 	var target net.Conn
 	var lastErr error
 	for _, addr := range dialTargets(req.Port, listeners()) {
-		target, lastErr = net.DialTimeout("tcp", addr, 3*time.Second)
+		_ = inNet(func() error { target, lastErr = net.DialTimeout("tcp", addr, 3*time.Second); return nil })
 		if lastErr == nil {
 			break
 		}
