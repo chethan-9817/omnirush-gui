@@ -194,6 +194,8 @@ import { createChatTracker, rememberComputerUseSwitch } from "./computer-use/des
 import { registerComputerUseRoutes } from "./computer-use/routes.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./work/routes.js";
 import { rememberWorkSwitch, workDir } from "./work/work.js";
+import { isV2WorkRoot, withV2WorkPermissions } from "./work/engine.js";
+import { WORK_PROMPT } from "./work/prompt.js";
 import {
   applyProviderLockAnswer,
   assertConfigWithinLock,
@@ -2329,6 +2331,7 @@ export async function proxyOpencodeV2Request(input: {
   // The v2 daemon has a global session namespace: a location query does not
   // prevent reading a session owned by another workspace. Match the v1 mount's
   // ownership boundary before forwarding session reads or mutations.
+  let sessionPermissions: unknown;
   if (sessionId?.startsWith("ses_")) {
     const sessionUrl = new URL(target);
     sessionUrl.pathname = `/api/session/${encodeURIComponent(sessionId)}`;
@@ -2347,6 +2350,7 @@ export async function proxyOpencodeV2Request(input: {
     const session = isRecord(data) && isRecord(data.info) ? data.info : data;
     const location = isRecord(session) && isRecord(session.location) ? session.location : null;
     const directory = location && typeof location.directory === "string" ? location.directory : null;
+    sessionPermissions = isRecord(session) ? session.permissions : undefined;
     const [expected, actual] = await Promise.all([
       realpath(input.workspace.path).catch(() => input.workspace.path),
       directory ? realpath(directory).catch(() => directory) : null,
@@ -2374,7 +2378,18 @@ export async function proxyOpencodeV2Request(input: {
       if (!response.ok) throw new ApiError(502, "engine_skill_sync_failed", "Native skills are unavailable");
       return response.json();
     });
-    const value = buildOmniRushV2Instructions(false);
+    // Work mode (work/engine.ts): a Work chat's own rules (no shell or code tools, writes ask) and the Work prompt.
+    const workChat = isV2WorkRoot(workDir(runtimeStorageDir(input.config)), input.workspace.path);
+    const workRules = workChat ? withV2WorkPermissions(sessionPermissions) : null;
+    if (workRules) {
+      const sessionUrl = new URL(target);
+      sessionUrl.pathname = `/api/session/${encodeURIComponent(sessionId)}`;
+      const patched = await loopbackFetch(sessionUrl.toString(), {
+        method: "PATCH", headers: internalHeaders, body: JSON.stringify({ permissions: workRules }), signal: AbortSignal.timeout(15_000),
+      });
+      if (!patched.ok) throw new ApiError(502, "engine_permission_sync_failed", "Work chat rules could not be applied");
+    }
+    const value = workChat ? { ...buildOmniRushV2Instructions(false), operatingInstructions: WORK_PROMPT } : buildOmniRushV2Instructions(false);
     const instructionUrl = new URL(target);
     instructionUrl.pathname = `/api/experimental/session/${encodeURIComponent(sessionId)}/instructions/entries/${OMNIRUSH_V2_INSTRUCTION_KEY}`;
     const synced = await loopbackFetch(instructionUrl.toString(), {

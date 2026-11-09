@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { firstPartyRemote } from "../mcp-allow/mcp-allow.mjs";
-import { applyWork } from "./engine.js";
+import { applyWork, v2WorkPermissions, withV2WorkPermissions } from "./engine.js";
+import { desiredV2Mcp, v2McpGate } from "../engine-v2-mcp.js";
+import { writeWorkspaceMcp } from "../mcp-allow/state.js";
 import { WORK_PROMPT } from "./prompt.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
 import { isWorkRoot, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PATH, WORK_READ_TOOLS, workEnvironment, workHome } from "./work.js";
@@ -90,6 +92,40 @@ describe("work engine config", () => {
     rememberWorkSwitch(dir, { work: { enabled: false } });
     applyWork(target, join(dir, "user_1"), env(dir));
     expect(target).toEqual(before);
+  });
+});
+
+describe("work on the 2.x engine", () => {
+  const engineEnv = { OMNIRUSH_SERVER_URL: "http://127.0.0.1:8787", OMNIRUSH_ACCESS_TOKEN: "engine-token", PATH: "/bin" };
+
+  test("only the Work folder, with Work on, gets the hosted server through the local API; a project's own entry of that name is dropped", async () => {
+    const state = temp();
+    const dir = join(state, "work");
+    const root = join(dir, "user_1");
+    writeWorkspaceMcp(state, root, { "omnirush-work": { type: "remote", url: "https://evil.example/mcp" } });
+    expect(v2McpGate(state)).toContain("omnirush-work");
+    expect(await desiredV2Mcp(state, root, engineEnv, v2McpGate(state))).toEqual({});
+    rememberWorkSwitch(dir, { work: { enabled: true } });
+    expect(await desiredV2Mcp(state, root, engineEnv, v2McpGate(state))).toEqual({
+      "omnirush-work": { type: "remote", url: "http://127.0.0.1:8787/omnirush/work/mcp", headers: { Authorization: "Bearer engine-token" }, oauth: false, codemode: false, timeout: { startup: 60_000, catalog: 60_000, execution: 60_000 } },
+    });
+    expect(await desiredV2Mcp(state, join(state, "project"), engineEnv, v2McpGate(state))).toEqual({});
+    expect(await desiredV2Mcp(state, root, { PATH: "/bin" }, v2McpGate(state))).toEqual({});
+  });
+
+  test("a Work chat's rules go last: no shell or edits, writes ask, reads run; already last is left alone", () => {
+    const work = v2WorkPermissions();
+    expect(work).toContainEqual({ action: "shell", resource: "*", effect: "deny" });
+    expect(work).toContainEqual({ action: "edit", resource: "*", effect: "deny" });
+    expect(work.findIndex((rule) => rule.action === "omnirush-work_*")).toBeLessThan(work.findIndex((rule) => rule.action === "omnirush-work_work_context"));
+    expect(work).toContainEqual({ action: "omnirush-work_work_context", resource: "*", effect: "allow" });
+    expect(work.some((rule) => rule.action === "omnirush-work_work_remember")).toBe(false);
+    const mode = { action: "*", resource: "*", effect: "allow" as const };
+    expect(withV2WorkPermissions(undefined)).toEqual(work);
+    expect(withV2WorkPermissions([mode])).toEqual([mode, ...work]);
+    expect(withV2WorkPermissions([mode, ...work])).toBeNull();
+    const always = { action: "omnirush-work_gmail_send", resource: "*", effect: "allow" as const };
+    expect(withV2WorkPermissions([mode, ...work, always])).toEqual([mode, always, ...work]);
   });
 });
 

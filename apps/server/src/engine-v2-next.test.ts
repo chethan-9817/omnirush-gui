@@ -104,7 +104,7 @@ test("MCP on the 2.x engine: the gate lists the server list's ids, entries stay 
   const { v2McpConfig, v2McpGate, desiredV2Mcp } = await import("./engine-v2-mcp.js");
   const { writePolicyFile } = await import("./mcp-allow/mcp-allow.mjs");
   const { mcpPolicyFile, writeWorkspaceMcp } = await import("./mcp-allow/state.js");
-  expect(v2McpGate(dir)).toEqual([]);
+  expect(v2McpGate(dir)).toEqual(["omnirush-work"]);
   const engineEnv = { OPENCODE_PASSWORD: "pw", OMNIRUSH_POLICY_TOKEN: "tok", PATH: "/bin" };
   expect(v2McpConfig({ type: "local", command: ["node", "s.js"], environment: { A: "1" }, timeout: 2000 }, engineEnv)).toEqual({
     type: "local", command: ["node", "s.js"], environment: { A: "1", OPENCODE_PASSWORD: "", OMNIRUSH_POLICY_TOKEN: "" },
