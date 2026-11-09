@@ -3,6 +3,17 @@
   "schema": 1,
   "cli": [
     {
+      "version": "2.8.6",
+      "date": "2026-11-09",
+      "new": [
+        "`omnirush work mcp install` adds OmniRush Work's business tools (your connected mail, files, chat, CRM and more) to Claude Code, Codex, Cursor or OpenCode. `omnirush work mcp status` shows where it is added, and `uninstall` removes it again. Available when Work is on for your account."
+      ],
+      "improved": [
+        "Reliability improvements for chats in the sandbox."
+      ],
+      "fixed": []
+    },
+    {
       "version": "2.8.5",
       "date": "2026-11-09",
       "new": [],
@@ -440,6 +451,19 @@
     }
   ],
   "desktop": [
+    {
+      "version": "3.8.3",
+      "date": "2026-11-09",
+      "new": [
+        "Work: a new Code | Work switch at the top of the sidebar (Cmd/Ctrl+Shift+K) for everyday business tasks. Start from a template like Inbox, Support desk, Meetings, Sales/CRM, Company search or Back office. No project folder needed. Shown when Work is on for your account.",
+        "Work > Connectors connects Google (Gmail, Drive, Calendar), Microsoft 365, Slack, HubSpot, QuickBooks, Notion, Jira, Confluence, Linear and GitHub. The agent searches and reads them, and asks you before it sends, posts or changes anything.",
+        "Work > Knowledge lists the people, companies and deals found across your connected tools, with a timeline that opens each item where it lives and the notes the agent should remember."
+      ],
+      "improved": [
+        "Reliability improvements for chats in the sandbox."
+      ],
+      "fixed": []
+    },
     {
       "version": "3.8.2",
       "date": "2026-10-28",
