@@ -192,7 +192,7 @@ import { rememberWebSearchSwitch, userWebSearchEnabled, webSearchAllowed, watchW
 import { askSideQuestion, brokerSideCall } from "./side-question.js";
 import { createChatTracker, rememberComputerUseSwitch } from "./computer-use/desktop.js";
 import { registerComputerUseRoutes } from "./computer-use/routes.js";
-import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./work/routes.js";
+import { findWorkWorkspace, forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./work/routes.js";
 import { rememberWorkSwitch, workDir } from "./work/work.js";
 import { isV2WorkRoot, withV2WorkPermissions } from "./work/engine.js";
 import { WORK_PROMPT } from "./work/prompt.js";
@@ -5500,6 +5500,10 @@ function createRoutes(
       return workspace;
     },
     applyEngine: () => applyComputerUseEngine(config, "work"),
+    refreshMcp: () => {
+      const workspace = findWorkWorkspace(config.workspaces);
+      if (workspace) engineV2ByServer.get(config)?.refreshWorkspaceMcp(workspace.path);
+    },
   });
 
   // Computer use (computer-use/routes.ts): for Electron main, which runs the host.

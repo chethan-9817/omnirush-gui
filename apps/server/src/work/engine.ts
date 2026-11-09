@@ -1,7 +1,7 @@
 // Work chats' engine config (Work mode), applied by the MCP plugin (opencode-plugins/omnirush-mcp-policy.ts).
 import { FIRST_PARTY_REMOTE, firstPartyRemote, toolPrefix } from "../mcp-allow/mcp-allow.mjs";
 import { WORK_PROMPT } from "./prompt.js";
-import { isWorkRoot, rememberedWorkSwitch, WORK_DIR_ENV, WORK_DISABLED_TOOLS, WORK_READ_TOOLS } from "./work.js";
+import { isWorkRoot, rememberedWorkConnectors, rememberedWorkSwitch, WORK_DIR_ENV, WORK_DISABLED_TOOLS, WORK_READ_TOOLS } from "./work.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -48,11 +48,16 @@ export function isV2WorkRoot(dir: string, root: string): boolean {
   return isWorkRoot(dir, root) && rememberedWorkSwitch(dir).enabled;
 }
 
-/** The hosted server as a 2.x runtime MCP entry, through the app's local API with the engine's own token; null without either. */
-export function v2WorkMcp(engineEnv: Record<string, string | undefined>): Record<string, unknown> | null {
+/**
+ * The hosted server as a 2.x runtime MCP entry, through the app's local API with the engine's own token; null without either.
+ * Its tools follow the connected sources, and the engine lists them only when the entry changes: the sources as last
+ * listed go in a header (the local API does not forward it), so connecting or disconnecting one reconnects the server.
+ */
+export function v2WorkMcp(engineEnv: Record<string, string | undefined>, dir?: string): Record<string, unknown> | null {
   const origin = String(engineEnv.OMNIRUSH_SERVER_URL ?? "").trim();
   const token = String(engineEnv.OMNIRUSH_ACCESS_TOKEN ?? "").trim();
-  const entry = token ? firstPartyRemote("work", origin, `${origin.replace(/\/+$/, "")}${FIRST_PARTY_REMOTE.work.path}`, { Authorization: `Bearer ${token}` }) : null;
+  const sources = dir ? rememberedWorkConnectors(dir).map((row) => row.id).sort().join(",") : "";
+  const entry = token ? firstPartyRemote("work", origin, `${origin.replace(/\/+$/, "")}${FIRST_PARTY_REMOTE.work.path}`, { Authorization: `Bearer ${token}`, "X-OmniRush-Work-Sources": sources || "none" }) : null;
   if (!entry) return null;
   return { type: "remote", url: entry.url, headers: entry.headers, oauth: false, codemode: false, timeout: { startup: 60_000, catalog: 60_000, execution: 60_000 } };
 }

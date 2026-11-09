@@ -124,9 +124,13 @@ export function rememberWorkConnectors(dir: string, listed: unknown): WorkConnec
  */
 export function workEnvironment(dir: string | null | undefined, root: string): { mode: "work"; work: { connectors: WorkConnectorUse[] } } | null {
   if (!dir || !isWorkRoot(dir, root)) return null;
+  return { mode: "work", work: { connectors: rememberedWorkConnectors(dir) } };
+}
+
+/** The account's connectors as last listed (rememberWorkConnectors). */
+export function rememberedWorkConnectors(dir: string): WorkConnectorUse[] {
   const saved = readJson(join(dir, "connectors.json"));
-  const connectors = isRecord(saved) && Array.isArray(saved.connectors)
+  return isRecord(saved) && Array.isArray(saved.connectors)
     ? saved.connectors.filter((row): row is WorkConnectorUse => isRecord(row) && typeof row.id === "string" && typeof row.enabled === "boolean").map((row) => ({ id: row.id, enabled: row.enabled }))
     : [];
-  return { mode: "work", work: { connectors } };
 }

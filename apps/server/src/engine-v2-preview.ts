@@ -80,6 +80,8 @@ export interface EngineV2Preview {
   refreshProviders(): Promise<void>;
   ensureWorkspaceReady(directory: string): Promise<void>;
   syncWorkspaceMcp(workspaceId: string, directory: string): Promise<void>;
+  /** Applies a location's MCP servers again (they changed outside the runtime config: Work's connected sources). */
+  refreshWorkspaceMcp(directory: string): void;
   /** Whether a chat came from the 1.x store (engine-v2-migration.ts). */
   migratedFromV1(sessionId: string): boolean;
   stop(): Promise<void>;
@@ -710,5 +712,13 @@ export function createEngineV2Preview(options: {
     if (enabled) void start().catch(recordStartError);
   }
   if (!options.deferStart) startWhenReady();
-  return { start: startWhenReady, status, setEnabled, setChatRouting, connection, awaitConnection, refreshProviders, ensureWorkspaceReady, syncWorkspaceMcp, migratedFromV1: (id) => migrated.has(id), stop };
+  function refreshWorkspaceMcp(directory: string): void {
+    mcpCleaned.delete(directory);
+    const id = mcpWorkspaces.get(directory);
+    if (id && sidecar) void syncWorkspaceMcp(id, directory).catch((error) => {
+      if (sidecar) lastError = `MCP: ${errorMessage(error)}`;
+    });
+  }
+
+  return { start: startWhenReady, status, setEnabled, setChatRouting, connection, awaitConnection, refreshProviders, ensureWorkspaceReady, syncWorkspaceMcp, refreshWorkspaceMcp, migratedFromV1: (id) => migrated.has(id), stop };
 }

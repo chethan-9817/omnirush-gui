@@ -18,7 +18,7 @@ import { mkdir } from "node:fs/promises";
 
 import { addRoute, type Route } from "../routes/registry.js";
 import type { ServerConfig, WorkspaceInfo } from "../types.js";
-import { rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
+import { rememberedWorkConnectors, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
   workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
@@ -36,6 +36,8 @@ export type WorkRouteDeps = {
   addWorkspace: (folderPath: string) => Promise<WorkspaceInfo>;
   /** The engine picks up a changed switch (the Work folder's server comes or goes). */
   applyEngine: () => Promise<unknown>;
+  /** The engine lists the hosted server's tools again (a source was connected or disconnected). */
+  refreshMcp?: () => void;
 };
 
 const WORK_ERRORS: Record<string, string> = {
@@ -108,7 +110,11 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     const found = deps.broker();
     if (!found) return signedOut();
     const answer = await passThrough(await found.workRequest("connectors", { method: "GET" }), jsonResponse);
-    if (answer.status === 200) rememberWorkConnectors(deps.workDir(), answer.data);
+    if (answer.status === 200) {
+      const ids = (rows: { id: string }[]) => rows.map((row) => row.id).sort().join(",");
+      const before = ids(rememberedWorkConnectors(deps.workDir()));
+      if (ids(rememberWorkConnectors(deps.workDir(), answer.data)) !== before) deps.refreshMcp?.();
+    }
     return answer.response;
   });
 

@@ -107,8 +107,14 @@ describe("work on the 2.x engine", () => {
     expect(await desiredV2Mcp(state, root, engineEnv, v2McpGate(state))).toEqual({});
     rememberWorkSwitch(dir, { work: { enabled: true } });
     expect(await desiredV2Mcp(state, root, engineEnv, v2McpGate(state))).toEqual({
-      "omnirush-work": { type: "remote", url: "http://127.0.0.1:8787/omnirush/work/mcp", headers: { Authorization: "Bearer engine-token" }, oauth: false, codemode: false, timeout: { startup: 60_000, catalog: 60_000, execution: 60_000 } },
+      "omnirush-work": { type: "remote", url: "http://127.0.0.1:8787/omnirush/work/mcp", headers: { Authorization: "Bearer engine-token", "X-OmniRush-Work-Sources": "none" }, oauth: false, codemode: false, timeout: { startup: 60_000, catalog: 60_000, execution: 60_000 } },
     });
+    // A source connected (or gone) changes the entry, so the engine reconnects and lists that source's tools.
+    rememberWorkConnectors(dir, [{ id: "slack", status: "connected", sync_enabled: false }, { id: "mock", status: "connected", sync_enabled: true }]);
+    const sources = async () => ((await desiredV2Mcp(state, root, engineEnv, v2McpGate(state)))["omnirush-work"]?.headers as Record<string, string>)["X-OmniRush-Work-Sources"];
+    expect(await sources()).toBe("mock,slack");
+    rememberWorkConnectors(dir, [{ id: "mock", status: "disconnected", sync_enabled: true }]);
+    expect(await sources()).toBe("none");
     expect(await desiredV2Mcp(state, join(state, "project"), engineEnv, v2McpGate(state))).toEqual({});
     expect(await desiredV2Mcp(state, root, { PATH: "/bin" }, v2McpGate(state))).toEqual({});
   });
@@ -150,7 +156,8 @@ describe("work routes", () => {
       capabilities: async () => ({ work: { enabled: true, sources: ["mock"] } }),
     };
     const config = { workspaces: [] } as unknown as ServerConfig;
-    registerWorkRoutes({ routes, config, workDir: () => dir, broker: () => broker, jsonResponse: json, readJsonBody: (r) => r.json(), addWorkspace: async (folderPath) => ({ id: "ws_work", name: "Work", path: folderPath, preset: "work", workspaceType: "local" }), applyEngine: async () => undefined });
+    const refreshed: number[] = [];
+    registerWorkRoutes({ routes, config, workDir: () => dir, broker: () => broker, jsonResponse: json, readJsonBody: (r) => r.json(), addWorkspace: async (folderPath) => ({ id: "ws_work", name: "Work", path: folderPath, preset: "work", workspaceType: "local" }), applyEngine: async () => undefined, refreshMcp: () => refreshed.push(1) });
     const call = async (method: string, path: string, body?: unknown) => {
       const pathname = path.split("?")[0] ?? "";
       const route = routes.find((r) => r.method === method && r.regex.test(pathname));
@@ -161,22 +168,25 @@ describe("work routes", () => {
       const request = new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       return route.handler({ request, url: new URL(request.url), params } as never);
     };
-    return { dir, calls, call };
+    return { dir, calls, call, refreshed };
   }
 
   test("state, workspace and the connector calls go to /omnirush/work with the contract's shapes", async () => {
-    const { dir, calls, call } = setup((path) => path === "connectors"
+    const { dir, calls, call, refreshed } = setup((path) => path === "connectors"
       ? json([{ id: "mock", label: "Mock", status: "connected", sync_enabled: true, records: 3, last_sync_at: null, scopes: [] }])
       : path.endsWith("/start") ? json({ auth_url: "https://auth.example/x" }) : json({ ok: true, sync_enabled: false }));
     expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, sources: ["mock"], message: null, workspaceId: null });
     expect(await (await call("POST", "/work/workspace")).json()).toEqual({ workspaceId: "ws_work", path: join(dir, "user_1") });
     expect((await (await call("GET", "/work/connectors")).json())[0].id).toBe("mock");
     expect(workEnvironment(dir, join(dir, "user_1"))?.work.connectors).toEqual([{ id: "mock", enabled: true }]);
+    // A newly connected source makes the engine list the server's tools again; the same sources do not.
+    await call("GET", "/work/connectors");
+    expect(refreshed.length).toBe(1);
     expect(await (await call("POST", "/work/connectors/mock/start")).json()).toEqual({ auth_url: "https://auth.example/x" });
     expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: false })).status).toBe(200);
     expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: "no" })).status).toBe(400);
     expect((await call("POST", "/work/connectors/Bad.Id/start")).status).toBe(404);
-    expect(calls).toEqual(["GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}"]);
+    expect(calls).toEqual(["GET connectors ", "GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}"]);
   });
 
   test("health, entities and facts are forwarded with only their own parameters, and checked first", async () => {

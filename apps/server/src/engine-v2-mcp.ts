@@ -106,7 +106,7 @@ export async function desiredV2Mcp(stateDir: string, root: string, engineEnv: Re
       out[CLOUD_MCP_NAME] = { type: "remote", url: cloud.url, headers, ...(cloud.oauth === false ? { oauth: false } : {}), codemode: false, ...timeout };
     }
     // Work mode: the account's Work folder gets the hosted connector server (through the app's local API).
-    const work = gate.includes(FIRST_PARTY_REMOTE.work.id) && isV2WorkRoot(workDir(stateDir), root) ? v2WorkMcp(engineEnv) : null;
+    const work = gate.includes(FIRST_PARTY_REMOTE.work.id) && isV2WorkRoot(workDir(stateDir), root) ? v2WorkMcp(engineEnv, workDir(stateDir)) : null;
     if (work) out[FIRST_PARTY_REMOTE.work.id] = work;
     return out;
   } catch {
