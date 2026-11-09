@@ -107,6 +107,8 @@ export function launchCommand(entry: McpAllowEntry, launch: McpLaunch, version: 
 export function windowsDirect(found: string, platform?: string, exists?: (file: string) => boolean): string[] | null;
 export const MCP_FILTERED_MARK: unique symbol;
 export function normalizeRemoteUrl(value: unknown): string | null;
+export const FIRST_PARTY_REMOTE: { work: { id: string; path: string; title: string } };
+export function firstPartyRemote(name: string, origin: string | null | undefined, url: string, headers?: Record<string, string>): { type: "remote"; url: string; oauth: false; enabled: true; headers?: Record<string, string> } | null;
 export function resolveRunner(runner: string, options?: { root?: string | null; platform?: string; env?: Record<string, string | undefined>; exists?: (file: string) => boolean; home?: string; accept?: ((file: string) => boolean) | null }): string | null;
 export function projectCodeIgnored(cfg: unknown): McpIgnored[];
 export function describeIgnored(items: McpIgnored[] | null | undefined): string | null;

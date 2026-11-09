@@ -7,6 +7,8 @@
 //   keyed by their id, pinned, paths checked, and run in the project's sandbox
 //   when it is on. The report (OMNIRUSH_MCP_REPORT_DIR) says which and why.
 // - tool.execute.before: servers limited to local pages refuse other pages.
+// - Work mode (work/engine.ts): the Work folder gets the hosted connector server, no shell or code tools
+//   and the Work prompt; the id `omnirush-work` is reserved like `computer-use`.
 // - computer use (computer-use/desktop.ts): the app's built-in `computer-use`
 //   server is added when it is on (its id is always reserved), sub-agents get
 //   no computer tools, and old screenshots of computer tools are pruned from
@@ -17,13 +19,14 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import { createMcpPolicyHooks, MCP_ENV_VALUES_MARK, mcpServerEnvironment, reportPath, type McpBox } from "../mcp-allow/mcp-allow.mjs";
+import { createMcpPolicyHooks, FIRST_PARTY_REMOTE, MCP_ENV_VALUES_MARK, mcpServerEnvironment, reportPath, type McpBox } from "../mcp-allow/mcp-allow.mjs";
 import { readWorkspaceMcp } from "../mcp-allow/state.js";
 import { computerUseBuiltins, COMPUTER_USE_DIR_ENV } from "../computer-use/desktop.js";
 import { isComputerTool, SERVER_ID } from "../computer-use/shared/contract.mjs";
 import { pruneImages } from "../computer-use/shared/media.mjs";
 import { REAL_SCREEN_DENY_RULES, SCREEN_BASH_RULES, subagentPermissionRules } from "../computer-use/shared/policy.mjs";
 import { boxHome, desktopProjects, keyOf, record } from "../box/plugin-lib.js";
+import { applyWork } from "../work/engine.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -119,7 +122,7 @@ function withoutSubagentComputerTools(target: Record<string, unknown>): void {
 
 /** Config names that are, or would make tool names of, the built-in server (`computer-use`, `computer-use_x` → `computer-use_x_act`). */
 function reservedNames(mcp: Record<string, unknown>): string[] {
-  return Object.keys(mcp).filter((name) => name.toLowerCase().startsWith(SERVER_ID));
+  return Object.keys(mcp).filter((name) => name.toLowerCase().startsWith(SERVER_ID) || name.toLowerCase().startsWith(FIRST_PARTY_REMOTE.work.id));
 }
 
 type SessionClient = { session?: { get?: (options: { path: { id: string } }) => Promise<{ data?: { parentID?: unknown } } | undefined> } };
@@ -184,6 +187,7 @@ export default async function omnirushMcpPolicy(input?: { directory?: string; cl
         }
         withoutSubagentComputerTools(target);
       }
+      if (target) applyWork(target, root);
       if (target) applyRealScreenDeny(target);
     },
     // Old screenshots of computer tools leave the model's context in blocks (keep 12, drop 8);

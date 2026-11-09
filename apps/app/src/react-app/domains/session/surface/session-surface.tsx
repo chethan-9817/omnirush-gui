@@ -587,6 +587,8 @@ function createImageLightboxEvalMessages(sessionId: string): UIMessage[] {
 }
 
 export type SessionSurfaceProps = {
+  /** A Work mode chat (domains/work): no coding checklist and no sub-agent model picker. */
+  workChat?: boolean;
   /** OmniRush GUI has no MCP capability. */
   mcpDisabled?: boolean;
   client: OmniRushServerClient;
@@ -3677,7 +3679,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           onCheckAcceptance={() => void checkUnknownAdmission(true)}
           onStop={async () => { await handleAbort(); }}
         />
-        <GoodSessionChecklistBar
+        {props.workChat ? null : <GoodSessionChecklistBar
           sessionId={props.sessionId}
           messages={renderedMessages}
           workspaceRoot={props.workspaceRoot}
@@ -3686,7 +3688,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           onFinishIt={handleMessageListSetPrompt}
           onAutoRetry={handleAutoRetry}
           client={props.client}
-        />
+        />}
         <PlacementTurnFooter
           sessionId={props.sessionId}
           turnRunning={chatStreaming || (effectiveActivityStatus !== "idle" && effectiveActivityStatus !== "error")}
@@ -3696,7 +3698,7 @@ export function SessionSurface(props: SessionSurfaceProps) {
           runModeControl={<WorkspaceRunModeMenu client={props.client} workspaceId={props.workspaceId} busy={chatStreaming || preparingCloudTools || Boolean(props.activePermission || props.activeQuestion)} />}
           fullPermissionsControl={<FullPermissionsToggle client={props.client} workspaceId={props.workspaceId} />}
           sandboxControl={<SandboxStatusChip client={props.client} workspaceId={props.workspaceId} sessionId={props.sessionId ?? null} model={props.selectedModel?.providerID === "omnirush" ? props.selectedModel.modelID : null} onOpenSettings={() => props.onOpenSettingsSection?.("sandbox")} />}
-          subagentModelControl={<SubagentModelMenu client={props.client} chatModel={props.selectedModel?.providerID === "omnirush" ? props.selectedModel.modelID : null} />}
+          subagentModelControl={props.workChat ? undefined : <SubagentModelMenu client={props.client} chatModel={props.selectedModel?.providerID === "omnirush" ? props.selectedModel.modelID : null} />}
           voiceClient={props.client}
           voiceWorkspaceId={props.workspaceId}
           draft={autoSendPayload ? draft : autoSending ? "" : draft}

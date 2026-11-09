@@ -610,6 +610,22 @@ export type OmniRushGoodSession = {
 /** The user's web search switch (GET/PUT /omnirush/web-search): `enabled` = on and allowed by the server. */
 export type OmniRushWebSearchState = { enabled: boolean; user: boolean; serverAllows: boolean };
 
+/** Work mode (the server's `work` switch, as the local server last read it). */
+export type OmniRushWorkState = { enabled: boolean; sources: string[]; message: string | null; workspaceId: string | null };
+export type OmniRushWorkConnectorStatus = "disconnected" | "connected" | "error" | "syncing" | "unavailable";
+/** One source of GET /omnirush/work/connectors (e2e/work-mode-contract-2026-11-09.md). */
+export type OmniRushWorkConnector = {
+  id: string;
+  label: string;
+  status: OmniRushWorkConnectorStatus;
+  account?: string;
+  error?: string;
+  scopes?: string[];
+  last_sync_at: string | null;
+  records: number;
+  sync_enabled: boolean;
+};
+
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
   /** Whether an omnirush.ai account is signed in (its models can run). */
@@ -2265,6 +2281,18 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
         body: setting,
         timeoutMs: timeouts.config,
       }),
+    getWorkState: () =>
+      requestJson<OmniRushWorkState>(baseUrl, "/work/state", { token, hostToken, timeoutMs: timeouts.config }),
+    ensureWorkWorkspace: () =>
+      requestJson<{ workspaceId: string; path: string }>(baseUrl, "/work/workspace", { token, hostToken, method: "POST", timeoutMs: timeouts.activateWorkspace }),
+    listWorkConnectors: () =>
+      requestJson<OmniRushWorkConnector[]>(baseUrl, "/work/connectors", { token, hostToken, timeoutMs: timeouts.config }),
+    startWorkConnector: (id: string) =>
+      requestJson<{ auth_url: string }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/start`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    disconnectWorkConnector: (id: string) =>
+      requestJson<unknown>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/disconnect`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
+    setWorkConnectorSync: (id: string, syncEnabled: boolean) =>
+      requestJson<{ ok: boolean; sync_enabled: boolean }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: { sync_enabled: syncEnabled }, timeoutMs: timeouts.config }),
     getWebSearch: () =>
       requestJson<OmniRushWebSearchState>(baseUrl, "/omnirush/web-search", { token, hostToken, timeoutMs: timeouts.config }),
     setWebSearch: (enabled: boolean) =>

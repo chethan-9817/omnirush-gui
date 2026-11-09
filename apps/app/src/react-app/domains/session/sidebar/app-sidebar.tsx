@@ -35,7 +35,7 @@ import {
   Sparkles,
   CircleHelp,
 } from "lucide-react";
-import { CalendarClock, Flag, LayoutDashboard, Megaphone, MessageSquareText, Puzzle } from "lucide-react";
+import { CalendarClock, Flag, Home, LayoutDashboard, Megaphone, MessageSquareText, Plug, Puzzle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
@@ -928,6 +928,10 @@ function SessionSideChatControl({ workspaceId, sessionId, title }: {
 }
 
 export type AppSidebarProps = {
+  /** Work mode (domains/work): the Code | Work switch at the top, shown only while Work is on for the account. */
+  modeToggle?: React.ReactNode;
+  /** In Work: Home and Connectors take the place of the Code tools row. */
+  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean };
   sessionNumberShortcuts: SessionNumberShortcutsState;
   workspaceSessionGroups: WorkspaceSessionGroup[];
   selectedWorkspaceId: string;
@@ -1484,6 +1488,7 @@ export function AppSidebar(props: AppSidebarProps) {
           </div>
         ) : null}
         <SidebarHeader className="mb-0 mt-2 gap-1">
+          {props.modeToggle}
           <SidebarMenu>
             <SidebarMenuItem className="flex items-center gap-0.5">
               <SidebarMenuButton
@@ -1512,6 +1517,13 @@ export function AppSidebar(props: AppSidebarProps) {
             </SidebarMenuItem>
           </SidebarMenu>
           {/* One row of icons for the places opened now and then, so the chat list keeps the height. */}
+          {props.workNavigation ? (
+            <div role="group" aria-label="Work" data-testid="sidebar-work-tools" className="flex items-center gap-0.5">
+              <SidebarIconButton icon={Home} label="Work home" onClick={props.workNavigation.onOpenHome} />
+              <SidebarIconButton icon={Plug} label="Connectors" active={props.workNavigation.connectorsActive} onClick={props.workNavigation.onOpenConnectors} data-testid="sidebar-work-connectors" />
+              <NotificationBell variant="sidebar-icon" />
+            </div>
+          ) : (
           <div role="group" aria-label={t("sidebar.tools")} data-testid="sidebar-tools" className="flex items-center gap-0.5">
             <SidebarIconButton
               icon={ShieldCheck}
@@ -1574,6 +1586,7 @@ export function AppSidebar(props: AppSidebarProps) {
             />
             <NotificationBell variant="sidebar-icon" />
           </div>
+          )}
           {auditOpen ? (
             <AuditTrailMiniPanel
               open={auditOpen}
@@ -1607,7 +1620,7 @@ export function AppSidebar(props: AppSidebarProps) {
               <span className={SIDEBAR_SECTION_LABEL}>
                 {t("workspace_list.title")}
               </span>
-              {canCreateWorkspaces() ? (
+              {canCreateWorkspaces() && !props.workNavigation ? (
                 <button
                   type="button"
                   className="ml-auto flex size-5 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-foreground"

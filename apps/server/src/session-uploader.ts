@@ -1,4 +1,5 @@
 import { permissionSetupSettings, type ApprovalMode } from "./approval-mode.js";
+import { workDir, workEnvironment, type WorkConnectorUse } from "./work/work.js";
 import { engineV2Root, MIGRATED_FROM, readMigratedSessions } from "./engine-v2-migration.js";
 import { gitChildEnv } from "./git-env.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -321,6 +322,9 @@ export type UploadEnvironment = {
   mcp_servers?: McpServerUse[];
   /** Computer use in this chat (computer-use/desktop.ts): only when it was used. */
   computer_use?: ComputerUseEnvironment;
+  /** A Work mode chat (work/work.ts): "work"; absent on every other chat. */
+  mode?: "work";
+  work?: { connectors: WorkConnectorUse[] };
 };
 
 /** A box chat's toolchain without this machine's `system` and `shell` blocks. */
@@ -902,6 +906,8 @@ export type TraceCapabilities = {
   web_search?: Record<string, unknown>;
   /** Computer use (computer-use/desktop.ts): the block as the server sent it; absent is off. */
   computer_use?: Record<string, unknown>;
+  /** Work mode (work/work.ts): the block as the server sent it; absent is off. */
+  work?: Record<string, unknown>;
   /** The MCP list (mcp-allow/state.ts remembers it): absent is off. */
   mcp?: Record<string, unknown>;
   /** The model provider lock (provider-lock.ts): the block as the server sent it; absent is locked. */
@@ -5284,7 +5290,9 @@ export class SessionUploader {
     // Also a reopened or recovered chat before its next prompt: the model its stored messages name (a recovered state is not among this.sessions).
     const claude = this.notClaudeChats.has(sessionId) ? undefined : this.claudeChats.get(sessionId) ?? ((model ?? this.sessions.get(sessionId)?.model)?.provider_id === CLAUDE_PROVIDER_ID ? CLAUDE_CODE_VERSION : undefined);
     const harness = claude ? { engine_version: `claude-code/${claude}`, harness: { name: "claude-code", engine: "claude-code", version: claude, build_tag: environment.harness.build_tag, host_engine: environment.engine_version, runtime: "box", engine_schema: "opencode-v2" }, engine_schema: "opencode-v2" } as unknown as Partial<UploadEnvironment> : {};
-    return { ...environment, ...harness, ...boxEnvironment(environment, box?.label ?? null), ...(toolchain ? { toolchain } : {}), ...(box ? { sandbox: box.label } : {}), ...(importedFrom ? { imported_from: importedFrom } : {}), ...(mcpServers ? { mcp_servers: mcpServers } : {}), ...(computerUse ? { computer_use: computerUse } : {}) };
+    // Only a chat in the Work folder gets the Work fields; every other chat uploads exactly as before.
+    const work = this.stateDir ? workEnvironment(workDir(this.stateDir), root) : null;
+    return { ...environment, ...harness, ...boxEnvironment(environment, box?.label ?? null), ...(toolchain ? { toolchain } : {}), ...(box ? { sandbox: box.label } : {}), ...(importedFrom ? { imported_from: importedFrom } : {}), ...(mcpServers ? { mcp_servers: mcpServers } : {}), ...(computerUse ? { computer_use: computerUse } : {}), ...(work ?? {}) };
   }
 
   /** A Claude chat (opencode-plugins/claude-provider) and its Claude Code version. */

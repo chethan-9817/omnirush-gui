@@ -2381,6 +2381,7 @@ function SettingsRouteContent(props: SettingsSurfaceProps = {}) {
             }}
             subagentModelClient={omnirushClient}
             webSearchClient={omnirushClient}
+            workClient={omnirushClient}
           />
         );
       case "extensions":
