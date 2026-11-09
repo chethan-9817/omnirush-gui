@@ -21,7 +21,7 @@ import {
   LayoutSectionItemTitle,
 } from "@/react-app/domains/settings/settings-layout";
 
-import { connectSettled, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES, workConnectorsKey, type AppMode, type WorkClient } from "./work-mode";
+import { connectSettled, countLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES, workConnectorsKey, type AppMode, type WorkClient } from "./work-mode";
 
 const TEMPLATE_ICONS: Record<(typeof WORK_TEMPLATES)[number]["id"], ReactNode> = {
   inbox: <Inbox />,
@@ -187,7 +187,7 @@ export function ConnectorRow(props: {
           {row.status === "error"
             ? errorText(row.error)
             : connected
-              ? [row.account, `${row.records.toLocaleString()} records`, lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
+              ? [row.account, countLabel(row.records, "record"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
               : "Connect to let the agent search and use it."}
         </div>
       </div>

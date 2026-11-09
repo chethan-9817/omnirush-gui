@@ -114,7 +114,7 @@ import {
   type SessionPagePaneRuntime,
 } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
-import { isWorkModeShortcut, useWorkModeStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_PRESET, type AppMode } from "@/react-app/domains/work/work-mode";
+import { isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_PRESET, type AppMode } from "@/react-app/domains/work/work-mode";
 import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domains/work/work-views";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
@@ -558,10 +558,17 @@ export function SessionRoute() {
       navigate("/session", { replace: true });
       return;
     }
+    // Work off: its workspace is no project; leave it for a Code one (never open it with the IDE).
+    if (!workEnabled && selectedWorkspace?.preset === WORK_PRESET) {
+      const codeWorkspace = workspaces.find((workspace) => workspace.preset !== WORK_PRESET && !workspace.task);
+      if (codeWorkspace) navigateToWorkspaceSession(codeWorkspace.id, readLastSessionFor(codeWorkspace.id));
+      else navigate("/session", { replace: true });
+      return;
+    }
     if (appModeRestored.current || !workEnabled) return;
     appModeRestored.current = true;
     if (storedAppMode === "work" && appMode === "code" && !routeWorkspaceId) navigate(WORK_HOME_ROUTE, { replace: true });
-  }, [appMode, navigate, routeWorkspaceId, storedAppMode, workEnabled, workRouteRequested, workState.isPending]);
+  }, [appMode, navigate, navigateToWorkspaceSession, routeWorkspaceId, selectedWorkspace?.preset, storedAppMode, workEnabled, workRouteRequested, workState.isPending, workspaces]);
   // The Work workspace is made on the first visit to Work (the server picks its folder).
   const workWorkspaceRequested = useRef(false);
   useEffect(() => {
@@ -847,8 +854,8 @@ export function SessionRoute() {
   const sidebarWorkspaceSessionGroups = useMemo(
     () => workspaceSessionGroups
       .filter((group) => !group.workspace.task || group.workspace.id === selectedWorkspaceId)
-      // Work lists only the Work workspace's chats; Code never lists it.
-      .filter((group) => !workEnabled || (group.workspace.preset === WORK_PRESET) === (appMode === "work")),
+      // Work lists only the Work workspace's chats; Code (and the app while Work is off) never lists it.
+      .filter((group) => shownInMode(group.workspace, workEnabled, appMode)),
     [appMode, selectedWorkspaceId, workEnabled, workspaceSessionGroups],
   );
   const tasksBoardWorkspaceId = selectedWorkspace?.task && workspaces.some((workspace) => workspace.id === selectedWorkspace.task?.parentWorkspaceId)
@@ -2874,8 +2881,9 @@ export function SessionRoute() {
   }, [handleOpenProviderAuth]);
 
   const paletteSessionOptions = useMemo(
-    () => buildCommandPaletteSessions(workspaces, sessionsByWorkspaceId, selectedWorkspaceId),
-    [sessionsByWorkspaceId, selectedWorkspaceId, workspaces],
+    // Chats of the mode in view only (recent chats on the start screen, the palette).
+    () => buildCommandPaletteSessions(workspaces.filter((workspace) => shownInMode(workspace, workEnabled, appMode)), sessionsByWorkspaceId, selectedWorkspaceId),
+    [appMode, sessionsByWorkspaceId, selectedWorkspaceId, workEnabled, workspaces],
   );
 
   const paletteSessionModelSelection = selectedSessionId
@@ -3573,7 +3581,7 @@ export function SessionRoute() {
   const newTaskComposerWithProjects = useMemo<NewTaskComposerContext | null>(() => newTaskComposerContext && (workChatActive ? newTaskComposerContext : {
     ...newTaskComposerContext,
     projectPicker: {
-      workspaces: workspaces.filter((workspace) => !workEnabled || workspace.preset !== WORK_PRESET).map((workspace) => ({ id: workspace.id, name: workspace.displayNameResolved, path: workspace.path || null })),
+      workspaces: workspaces.filter((workspace) => shownInMode(workspace, workEnabled, "code")).map((workspace) => ({ id: workspace.id, name: workspace.displayNameResolved, path: workspace.path || null })),
       selectedId: selectedWorkspaceId || null,
       onSelect: (workspaceId: string) => {
         setLegacySelectedWorkspaceId(workspaceId);

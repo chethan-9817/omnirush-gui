@@ -1947,6 +1947,7 @@ export function SessionPage(props: SessionPageProps) {
                             safeStringify={props.safeStringify}
                             onOpenTarget={props.surface?.onOpenTarget ?? openTarget}
                             onOpenSubagentSession={openSubagentSession}
+                            workChat={props.workChat}
                           />
                         </div>
                       </div>

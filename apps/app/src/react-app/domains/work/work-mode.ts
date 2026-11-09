@@ -91,3 +91,37 @@ export const WORK_TEMPLATES = [
     prompt: "List unpaid and overdue invoices, and match recent payments and bills against them. Flag anything that doesn't reconcile.",
   },
 ] as const;
+
+/** "1 record", "2 records". */
+export const countLabel = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
+
+/** Which workspaces a mode lists: Work lists only the Work workspace; Code, and the whole app while Work is off, never do. */
+export const shownInMode = (workspace: { preset?: string | null }, workEnabled: boolean, mode: AppMode) =>
+  (workspace.preset === WORK_PRESET) === (workEnabled && mode === "work");
+
+/** The engine's name for the hosted connector server's tools: `omnirush-work_<tool>`. */
+export const WORK_TOOL_PREFIX = "omnirush-work_";
+
+const WORK_APPS: Record<string, string> = {
+  gmail: "Gmail", calendar: "Google Calendar", drive: "Google Drive", outlook: "Outlook", onedrive: "OneDrive", teams: "Teams",
+  slack: "Slack", hubspot: "HubSpot", qbo: "QuickBooks", notion: "Notion", jira: "Jira", confluence: "Confluence",
+  linear: "Linear", github: "GitHub", mock: "Test source",
+};
+const WORK_ACTIONS: Record<string, string> = {
+  send: "Send e-mail", draft: "Draft e-mail", post: "Post a message", create: "Create an event", note: "Add a note",
+  create_task: "Create a task", update_deal: "Update a deal", create_invoice_draft: "Create an invoice draft",
+  create_page: "Create a page", comment: "Add a comment", create_issue: "Create an issue",
+};
+
+/** An approval's tool and scope in words for a Work connector tool (`omnirush-work_gmail_send` → "Send e-mail (Gmail)",
+ *  "Your Gmail account"); null for any other permission. */
+export function workToolPermission(permission: string): { label: string; scope: string } | null {
+  if (!permission.startsWith(WORK_TOOL_PREFIX)) return null;
+  const tool = permission.slice(WORK_TOOL_PREFIX.length);
+  if (tool === "work_remember") return { label: "Save to company knowledge", scope: "Your Work knowledge" };
+  if (tool === "work_forget") return { label: "Forget saved knowledge", scope: "Your Work knowledge" };
+  const [app, ...rest] = tool.split("_");
+  const action = WORK_ACTIONS[rest.join("_")] ?? (rest.join(" ") || tool).replace(/^./, (c) => c.toUpperCase());
+  const name = WORK_APPS[app] ?? app;
+  return { label: `${action} (${name})`, scope: `Your ${name} account` };
+}

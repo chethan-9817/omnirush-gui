@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { t } from "@/i18n";
 import { displayRuntimeBrand } from "@/lib/display-runtime-brand";
 import type { PendingPermission } from "@/app/types";
+import { workToolPermission } from "@/react-app/domains/work/work-mode";
 
 type PermissionPresentation = {
   title: string;
@@ -250,6 +251,19 @@ function describePermissionRequest(permission: PendingPermission): PermissionPre
     };
   }
 
+  // Work connector tools (domains/work): the action and the account in words, not `omnirush-work_gmail_send` and `*`.
+  const work = workToolPermission(permission.permission);
+  if (work) {
+    return {
+      title: t("session.permission_title_generic", undefined, { permission: work.label }),
+      message: t("session.permission_message"),
+      permissionLabel: work.label,
+      scopeLabel: t("session.scope_label"),
+      scopeValue: work.scope,
+      isDoomLoop: false,
+      note: null,
+    };
+  }
   const copy = permissionCopy(permission.permission);
   return {
     title: copy.title,

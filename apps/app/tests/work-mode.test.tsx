@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { connectSettled, isWorkModeShortcut, visibleConnectors, WORK_TEMPLATES } from "../src/react-app/domains/work/work-mode";
+import { connectSettled, countLabel, isWorkModeShortcut, shownInMode, visibleConnectors, WORK_TEMPLATES, workToolPermission } from "../src/react-app/domains/work/work-mode";
 import { ConnectorRow, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
@@ -11,6 +11,32 @@ const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
 const noop = () => {};
 
 describe("Work mode", () => {
+  test("approvals name Work tools and their account in words", () => {
+    expect(workToolPermission("omnirush-work_gmail_send")).toEqual({ label: "Send e-mail (Gmail)", scope: "Your Gmail account" });
+    expect(workToolPermission("omnirush-work_mock_send")?.label).toBe("Send e-mail (Test source)");
+    expect(workToolPermission("omnirush-work_hubspot_update_deal")?.label).toBe("Update a deal (HubSpot)");
+    expect(workToolPermission("omnirush-work_work_remember")?.label).toBe("Save to company knowledge");
+    expect(workToolPermission("omnirush-work_acme_frobnicate")?.label).toBe("Frobnicate (acme)");
+    expect(workToolPermission("bash")).toBeNull();
+  });
+
+  test("the Work workspace shows only in Work, and nowhere while Work is off", () => {
+    const work = { preset: "work" };
+    const code = { preset: "starter" };
+    expect(shownInMode(work, true, "work")).toBe(true);
+    expect(shownInMode(code, true, "work")).toBe(false);
+    expect(shownInMode(work, true, "code")).toBe(false);
+    expect(shownInMode(work, false, "code")).toBe(false);
+    expect(shownInMode(work, false, "work")).toBe(false);
+    expect(shownInMode(code, false, "code")).toBe(true);
+  });
+
+  test("counts read naturally", () => {
+    expect(countLabel(1, "record")).toBe("1 record");
+    expect(countLabel(0, "record")).toBe("0 records");
+    expect(countLabel(1200, "record")).toBe("1,200 records");
+  });
+
   test("Cmd/Ctrl+Shift+K switches mode; Cmd/Ctrl+K stays the command palette", () => {
     const key = { key: "K", metaKey: true, ctrlKey: false, shiftKey: true, altKey: false };
     expect(isWorkModeShortcut(key, true)).toBe(true);
