@@ -590,6 +590,7 @@ export class ContextCapture {
         commandFiles: effects.flatMap((effect) => effect.writes),
         calls,
         sharedWindow,
+        box: this.boxOf(state) !== null,
       });
       if (event) this.emit(state.id, "context.outside_files", event);
     })());
