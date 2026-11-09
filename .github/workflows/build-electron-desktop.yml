@@ -288,7 +288,7 @@ jobs:
   electron-macos-notarization-smoke:
     if: ${{ !inputs.updater_e2e_only }}
     name: Electron macOS notarization smoke
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 300
 
     steps:
