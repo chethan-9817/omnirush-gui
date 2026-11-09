@@ -114,7 +114,8 @@ import {
   type SessionPagePaneRuntime,
 } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
-import { isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_PRESET, type AppMode } from "@/react-app/domains/work/work-mode";
+import { isWorkModeShortcut, shownInMode, useWorkModeStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_KNOWLEDGE_ROUTE, WORK_PRESET, type AppMode } from "@/react-app/domains/work/work-mode";
+import { WorkKnowledgePage } from "@/react-app/domains/work/knowledge-views";
 import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domains/work/work-views";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
@@ -3846,11 +3847,13 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? "Knowledge" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
       workChat={workChatActive}
       primarySlot={workRouteActive ? (
         location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
           <WorkConnectorsPage client={client ?? null} openLink={(url) => platform.openLink(url)} onBack={() => navigate(WORK_HOME_ROUTE)} />
+        ) : location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) ? (
+          <WorkKnowledgePage client={client ?? null} openLink={(url) => platform.openLink(url)} onAsk={startWorkChat} onBack={() => navigate(WORK_HOME_ROUTE)} />
         ) : (
           <WorkHome
             busy={!workWorkspace}
@@ -3904,7 +3907,7 @@ export function SessionRoute() {
       sidebar={{
         workspaceSessionGroups: sidebarWorkspaceSessionGroups,
         modeToggle: workEnabled ? <WorkModeToggle mode={appMode} onChange={switchAppMode} shortcut={/Mac/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘⇧K" : "Ctrl+Shift+K"} /> : undefined,
-        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE) } : undefined,
+        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE), onOpenKnowledge: () => navigate(WORK_KNOWLEDGE_ROUTE), knowledgeActive: location.pathname.startsWith(WORK_KNOWLEDGE_ROUTE) } : undefined,
         selectedWorkspaceId,
         selectedSessionId,
         developerMode: false,

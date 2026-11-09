@@ -158,8 +158,8 @@ export type SessionPageHistoryControls = {
 export type SessionPageSidebarProps = {
   /** Work mode (domains/work): the Code | Work switch at the top, shown only while Work is on for the account. */
   modeToggle?: React.ReactNode;
-  /** In Work: Home and Connectors take the place of the Code tools row. */
-  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean };
+  /** In Work: Home, Knowledge and Connectors take the place of the Code tools row. */
+  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean; onOpenKnowledge: () => void; knowledgeActive: boolean };
   workspaceSessionGroups: WorkspaceSessionGroup[];
   selectedWorkspaceId: string;
   selectedSessionId: string | null;

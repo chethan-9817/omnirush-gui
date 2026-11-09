@@ -625,6 +625,57 @@ export type OmniRushWorkConnector = {
   records: number;
   sync_enabled: boolean;
 };
+/** One source of GET /omnirush/work/health (contract Addendum A1). */
+export type OmniRushWorkHealth = {
+  id: string;
+  status?: string;
+  token_ok?: boolean;
+  scopes_ok?: boolean;
+  missing_scopes?: string[];
+  last_sync_at?: string | null;
+  last_error?: string | null;
+  backlog_estimate?: number | null;
+  checks?: { name: string; ok: boolean; detail?: string | null }[];
+};
+export type OmniRushWorkEntityKind = "person" | "company" | "deal" | "project" | "product" | "other";
+export type OmniRushWorkEntitySummary = {
+  id: string;
+  kind: OmniRushWorkEntityKind | string;
+  name: string;
+  keys: string[];
+  record_count: number;
+  sources: string[];
+  last_activity_at: string | null;
+};
+export type OmniRushWorkFactKind = "decision" | "preference" | "policy" | "fact" | "contact_note";
+export type OmniRushWorkFact = {
+  id: string;
+  entity_id?: string | null;
+  kind: OmniRushWorkFactKind | string;
+  text: string;
+  source_record_ids?: string[];
+  created_by?: "agent" | "user" | string;
+  status: "active" | "retired" | string;
+  created_at?: string;
+  updated_at?: string;
+};
+export type OmniRushWorkEntityRecord = {
+  source_id: string;
+  source: string;
+  kind: string;
+  subject?: string | null;
+  text_preview?: string | null;
+  occurred_at?: string | null;
+  actors?: unknown;
+  /** A link to the record at its source, when the server has one. */
+  url?: string | null;
+};
+export type OmniRushWorkEntityDetail = {
+  entity: OmniRushWorkEntitySummary & { attrs?: Record<string, unknown> };
+  records: OmniRushWorkEntityRecord[];
+  facts: OmniRushWorkFact[];
+  related: { id: string; kind: string; name: string; reason?: string | null }[];
+};
 
 export type OmniRushSubagentModelState = {
   setting: OmniRushSubagentModelSetting;
@@ -2293,6 +2344,18 @@ export function createOmniRushServerClient(options: { baseUrl: string; token?: s
       requestJson<unknown>(baseUrl, `/work/connectors/${encodeURIComponent(id)}/disconnect`, { token, hostToken, method: "POST", timeoutMs: timeouts.config }),
     setWorkConnectorSync: (id: string, syncEnabled: boolean) =>
       requestJson<{ ok: boolean; sync_enabled: boolean }>(baseUrl, `/work/connectors/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: { sync_enabled: syncEnabled }, timeoutMs: timeouts.config }),
+    getWorkHealth: (source?: string) =>
+      requestJson<unknown>(baseUrl, `/work/health${source ? `?source=${encodeURIComponent(source)}` : ""}`, { token, hostToken, timeoutMs: timeouts.config }),
+    listWorkEntities: (query: { q?: string; kind?: string; limit?: number; cursor?: string } = {}) => {
+      const params = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== "").map(([key, value]) => [key, String(value)]));
+      return requestJson<{ items: OmniRushWorkEntitySummary[]; next_cursor: string | null }>(baseUrl, `/work/entities${params.size ? `?${params}` : ""}`, { token, hostToken, timeoutMs: timeouts.config });
+    },
+    getWorkEntity: (id: string) =>
+      requestJson<OmniRushWorkEntityDetail>(baseUrl, `/work/entities/${encodeURIComponent(id)}`, { token, hostToken, timeoutMs: timeouts.config }),
+    addWorkFact: (fact: { text: string; kind: string; entity_id?: string }) =>
+      requestJson<OmniRushWorkFact>(baseUrl, "/work/facts", { token, hostToken, method: "POST", body: fact, timeoutMs: timeouts.config }),
+    updateWorkFact: (id: string, patch: { text?: string; status?: "active" | "retired" }) =>
+      requestJson<OmniRushWorkFact>(baseUrl, `/work/facts/${encodeURIComponent(id)}`, { token, hostToken, method: "PATCH", body: patch, timeoutMs: timeouts.config }),
     getWebSearch: () =>
       requestJson<OmniRushWebSearchState>(baseUrl, "/omnirush/web-search", { token, hostToken, timeoutMs: timeouts.config }),
     setWebSearch: (enabled: boolean) =>

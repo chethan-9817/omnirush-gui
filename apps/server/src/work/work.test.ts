@@ -7,7 +7,7 @@ import { firstPartyRemote } from "../mcp-allow/mcp-allow.mjs";
 import { applyWork } from "./engine.js";
 import { WORK_PROMPT } from "./prompt.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
-import { isWorkRoot, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, workEnvironment, workHome } from "./work.js";
+import { isWorkRoot, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PATH, WORK_READ_TOOLS, workEnvironment, workHome } from "./work.js";
 import type { Route } from "../routes/registry.js";
 import type { ServerConfig } from "../types.js";
 
@@ -17,8 +17,8 @@ describe("work switch", () => {
   test("off unless the server says enabled; a missing block turns it off; no answer keeps it", () => {
     const dir = temp();
     expect(rememberedWorkSwitch(dir).enabled).toBe(false);
-    expect(rememberWorkSwitch(dir, { work: { enabled: true, allow_users: "all", sources: ["google", "mock", "zendesk"] } })).toBe(true);
-    expect(rememberedWorkSwitch(dir)).toEqual({ enabled: true, sources: ["google", "mock"], message: null });
+    expect(rememberWorkSwitch(dir, { work: { enabled: true, allow_users: "all", sources: ["google", "mock", "jira", "zendesk", "../x", 7] } })).toBe(true);
+    expect(rememberedWorkSwitch(dir)).toEqual({ enabled: true, sources: ["google", "mock", "jira", "zendesk"], message: null });
     expect(rememberWorkSwitch(dir, null)).toBe(false);
     expect(rememberedWorkSwitch(dir).enabled).toBe(true);
     expect(rememberWorkSwitch(dir, { schema_versions: [1, 2, 3] })).toBe(true);
@@ -93,6 +93,15 @@ describe("work engine config", () => {
   });
 });
 
+describe("work prompt and tools", () => {
+  test("context tools read without asking; remember and forget ask; the prompt briefs and remembers", () => {
+    for (const tool of ["work_context", "work_entity", "jira_search", "github_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["work_remember", "work_forget", "jira_comment", "github_create_issue"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+    expect(WORK_PROMPT).toContain("call work_context");
+    expect(WORK_PROMPT).toContain("work_remember once they agree");
+  });
+});
+
 describe("work routes", () => {
   const json = (data: unknown, status = 200) => Response.json(data, { status });
   function setup(answer: (path: string, init: { method: string; body?: string; headers?: Record<string, string> }) => Response) {
@@ -107,10 +116,11 @@ describe("work routes", () => {
     const config = { workspaces: [] } as unknown as ServerConfig;
     registerWorkRoutes({ routes, config, workDir: () => dir, broker: () => broker, jsonResponse: json, readJsonBody: (r) => r.json(), addWorkspace: async (folderPath) => ({ id: "ws_work", name: "Work", path: folderPath, preset: "work", workspaceType: "local" }), applyEngine: async () => undefined });
     const call = async (method: string, path: string, body?: unknown) => {
-      const route = routes.find((r) => r.method === method && r.regex.test(path));
+      const pathname = path.split("?")[0] ?? "";
+      const route = routes.find((r) => r.method === method && r.regex.test(pathname));
       if (!route) throw new Error(`no route ${method} ${path}`);
       const params: Record<string, string> = {};
-      const match = path.match(route.regex);
+      const match = pathname.match(route.regex);
       route.keys.forEach((key, i) => { params[key] = match?.[i + 1] ?? ""; });
       const request = new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       return route.handler({ request, url: new URL(request.url), params } as never);
@@ -129,8 +139,37 @@ describe("work routes", () => {
     expect(await (await call("POST", "/work/connectors/mock/start")).json()).toEqual({ auth_url: "https://auth.example/x" });
     expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: false })).status).toBe(200);
     expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: "no" })).status).toBe(400);
-    expect((await call("POST", "/work/connectors/zendesk/start")).status).toBe(404);
+    expect((await call("POST", "/work/connectors/Bad.Id/start")).status).toBe(404);
     expect(calls).toEqual(["GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}"]);
+  });
+
+  test("health, entities and facts are forwarded with only their own parameters, and checked first", async () => {
+    const { calls, call } = setup((path) => json(path.startsWith("health") ? { sources: [{ id: "jira", token_ok: true, scopes_ok: false, missing_scopes: ["write:jira-work"] }] } : { items: [], next_cursor: null }));
+    expect((await (await call("GET", "/work/health?source=jira")).json()).sources[0].missing_scopes).toEqual(["write:jira-work"]);
+    expect((await call("GET", "/work/health?source=../x")).status).toBe(404);
+    await call("GET", "/work/entities?q=acme%20bakery&kind=company&limit=50&cursor=c1&evil=1");
+    await call("GET", "/work/entities/ent_42");
+    expect((await call("GET", "/work/entities/a%2Fb")).status).toBe(404);
+    await call("GET", "/work/facts?entity_id=ent_42&status=active");
+    expect((await call("POST", "/work/facts", { text: "  Dana approves orders over $5k ", kind: "policy", entity_id: "ent_42" })).status).toBe(200);
+    expect((await call("POST", "/work/facts", { text: "x", kind: "gossip" })).status).toBe(400);
+    expect((await call("POST", "/work/facts", { text: " ", kind: "fact" })).status).toBe(400);
+    expect((await call("PATCH", "/work/facts/f_1", { status: "retired", extra: 1 })).status).toBe(200);
+    expect((await call("PATCH", "/work/facts/f_1", { status: "deleted" })).status).toBe(400);
+    expect((await call("PATCH", "/work/facts/f_1", {})).status).toBe(400);
+    expect(calls).toEqual([
+      "GET health?source=jira ",
+      "GET entities?q=acme+bakery&kind=company&limit=50&cursor=c1 ",
+      "GET entities/ent_42 ",
+      "GET facts?entity_id=ent_42&status=active ",
+      "POST facts {\"text\":\"Dana approves orders over $5k\",\"kind\":\"policy\",\"entity_id\":\"ent_42\"}",
+      "PATCH facts/f_1 {\"status\":\"retired\"}",
+    ]);
+  });
+
+  test("the broker reaches only the contract's paths", () => {
+    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "mcp"]) expect(WORK_PATH.test(path)).toBe(true);
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", ""]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("the server's errors reach the app as they came (work_disabled)", async () => {

@@ -8,6 +8,9 @@
  *   POST  /work/connectors/:id/start       { auth_url }
  *   POST  /work/connectors/:id/disconnect
  *   PATCH /work/connectors/:id             { sync_enabled }
+ *   GET   /work/health[?source=]           the sources' health checks
+ *   GET   /work/entities?q=&kind=&limit=&cursor=, GET /work/entities/:id   the context graph
+ *   GET   /work/facts?entity_id=&status=, POST /work/facts, PATCH /work/facts/:id (retire: status)
  *
  * The engine's hosted MCP calls (POST /omnirush/work/mcp with the engine's token) are forwarded by server.ts.
  */
@@ -15,7 +18,7 @@ import { mkdir } from "node:fs/promises";
 
 import { addRoute, type Route } from "../routes/registry.js";
 import type { ServerConfig, WorkspaceInfo } from "../types.js";
-import { rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, workHome } from "./work.js";
+import { rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PRESET, WORK_SOURCE_ID, workHome } from "./work.js";
 
 export type WorkBroker = {
   workRequest: (path: string, init: { method: "GET" | "POST" | "PATCH"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }) => Promise<Response>;
@@ -43,7 +46,20 @@ const WORK_ERRORS: Record<string, string> = {
   omnirush_account_required: "Sign in to omnirush.ai to use Work.",
 };
 
-const CONNECTOR = /^(google|microsoft|slack|hubspot|quickbooks|notion|mock)$/;
+const CONNECTOR = WORK_SOURCE_ID;
+const RECORD_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+const FACT_KINDS = ["decision", "preference", "policy", "fact", "contact_note"];
+
+/** The query a list route forwards: only the named parameters, each short. */
+function forwardQuery(url: URL, names: string[]): string {
+  const out = new URLSearchParams();
+  for (const name of names) {
+    const value = url.searchParams.get(name)?.trim();
+    if (value) out.set(name, value.slice(0, 200));
+  }
+  const text = out.toString();
+  return text ? `?${text}` : "";
+}
 
 /** The Work workspace among the server's: preset "work" in the Work folder. */
 export function findWorkWorkspace(workspaces: WorkspaceInfo[]): WorkspaceInfo | null {
@@ -112,6 +128,57 @@ export function registerWorkRoutes(deps: WorkRouteDeps): void {
     const found = deps.broker();
     if (!found) return signedOut();
     return (await passThrough(await found.workRequest(`connectors/${ctx.params.id}`, { method: "PATCH", body: JSON.stringify({ sync_enabled: body.sync_enabled }) }), jsonResponse)).response;
+  });
+
+  // Connector health, the context graph and saved knowledge (Work > Knowledge): forwarded as they are.
+  const forward = async (path: string, method: "GET" | "POST" | "PATCH", body?: Record<string, unknown>) => {
+    const found = deps.broker();
+    if (!found) return signedOut();
+    return (await passThrough(await found.workRequest(path, { method, ...(body ? { body: JSON.stringify(body) } : {}) }), jsonResponse)).response;
+  };
+  const invalid = (detail: string) => jsonResponse({ detail, code: "invalid_request", message: detail }, 400);
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
+
+  addRoute(routes, "GET", "/work/health", "client", async (ctx) => {
+    const source = ctx.url.searchParams.get("source");
+    if (source && !CONNECTOR.test(source)) return jsonResponse({ detail: "unknown_connector" }, 404);
+    return forward(`health${forwardQuery(ctx.url, ["source"])}`, "GET");
+  });
+
+  addRoute(routes, "GET", "/work/entities", "client", async (ctx) => forward(`entities${forwardQuery(ctx.url, ["q", "kind", "limit", "cursor"])}`, "GET"));
+
+  addRoute(routes, "GET", "/work/entities/:id", "client", async (ctx) => {
+    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "not_found" }, 404);
+    return forward(`entities/${ctx.params.id}`, "GET");
+  });
+
+  addRoute(routes, "GET", "/work/facts", "client", async (ctx) => forward(`facts${forwardQuery(ctx.url, ["entity_id", "status"])}`, "GET"));
+
+  addRoute(routes, "POST", "/work/facts", "client", async (ctx) => {
+    const body = await deps.readJsonBody(ctx.request);
+    const fact = text(body.text);
+    if (!fact || fact.length > 4000) return invalid("A fact needs text (at most 4000 characters).");
+    if (typeof body.kind !== "string" || !FACT_KINDS.includes(body.kind)) return invalid(`kind must be one of ${FACT_KINDS.join(", ")}`);
+    const entity = body.entity_id === undefined || body.entity_id === null ? null : String(body.entity_id);
+    if (entity !== null && !RECORD_ID.test(entity)) return invalid("entity_id is not valid");
+    return forward("facts", "POST", { text: fact, kind: body.kind, ...(entity ? { entity_id: entity } : {}) });
+  });
+
+  addRoute(routes, "PATCH", "/work/facts/:id", "client", async (ctx) => {
+    if (!RECORD_ID.test(ctx.params.id ?? "")) return jsonResponse({ detail: "not_found" }, 404);
+    const body = await deps.readJsonBody(ctx.request);
+    const patch: Record<string, unknown> = {};
+    if (body.text !== undefined) {
+      const fact = text(body.text);
+      if (!fact || fact.length > 4000) return invalid("A fact needs text (at most 4000 characters).");
+      patch.text = fact;
+    }
+    if (body.status !== undefined) {
+      if (body.status !== "active" && body.status !== "retired") return invalid("status must be active or retired");
+      patch.status = body.status;
+    }
+    if (Object.keys(patch).length === 0) return invalid("Nothing to change.");
+    return forward(`facts/${ctx.params.id}`, "PATCH", patch);
   });
 }
 
