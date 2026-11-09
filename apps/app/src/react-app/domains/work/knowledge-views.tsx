@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { OmniRushWorkEntityDetail, OmniRushWorkEntityRecord, OmniRushWorkEntitySummary, OmniRushWorkFact } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
-import { askAboutPrompt, connectorLabel, ENTITY_KINDS, FACT_KINDS, workEntityKey, type WorkClient } from "./work-mode";
+import { askAboutPrompt, connectorLabel, countLabel, ENTITY_KINDS, FACT_KINDS, workEntityKey, type WorkClient } from "./work-mode";
 import { ConnectorIcon } from "./work-views";
 
 const PAGE = 50;
@@ -53,7 +53,7 @@ export function EntityListItem(props: { entity: OmniRushWorkEntitySummary; activ
         <span className="flex items-center gap-1">{entity.sources.slice(0, 4).map((source) => <ConnectorIcon key={source} id={source} className="size-3.5" />)}</span>
       </span>
       <span className="truncate text-[12px] text-muted-foreground">
-        {[kindLabel(entity.kind), `${entity.record_count.toLocaleString()} records`, when(entity.last_activity_at)].filter(Boolean).join(" · ")}
+        {[kindLabel(entity.kind), countLabel(entity.record_count, "record"), when(entity.last_activity_at)].filter(Boolean).join(" · ")}
       </span>
     </button>
   );
@@ -161,7 +161,7 @@ export function EntityDetail(props: {
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-xl font-semibold tracking-tight">{entity.name}</h2>
-          <p className="text-sm text-muted-foreground">{[kindLabel(entity.kind), `${entity.record_count.toLocaleString()} records`, when(entity.last_activity_at) && `last activity ${when(entity.last_activity_at)}`].filter(Boolean).join(" · ")}</p>
+          <p className="text-sm text-muted-foreground">{[kindLabel(entity.kind), countLabel(entity.record_count, "record"), when(entity.last_activity_at) && `last activity ${when(entity.last_activity_at)}`].filter(Boolean).join(" · ")}</p>
         </div>
         <Button size="sm" onClick={props.onAsk} data-testid="work-entity-ask"><MessageSquarePlus className="size-4" />Ask about this</Button>
       </div>
