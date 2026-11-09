@@ -76,6 +76,10 @@ export type OutsideFilesEvent = {
   content_bytes: number;
   /** Another session's turn ran at the same time: a file may be its. */
   shared_window: boolean;
+  /** Whether the host's temp, home and system folders were scanned; not for a session in the box. */
+  host_scan: boolean;
+  /** Why they were not: "box" (the session's commands write to the box's own filesystem, not the host's). */
+  host_scan_reason?: "box";
   timings_ms: Record<string, number>;
 };
 
@@ -222,6 +226,11 @@ export type OutsideFilesInput = {
   commandFiles?: string[];
   calls: readonly OutsideCallWindow[];
   sharedWindow: boolean;
+  /**
+   * The session's shell runs in the box: only the project (bind-mounted, same path) is the host's, so no
+   * host scan and no command target outside the project (another process's files, not the session's).
+   */
+  box?: boolean;
   /** Tests. */
   tmpRoots?: string[];
   budgetMs?: number;
@@ -235,7 +244,7 @@ export async function outsideFilesOfTurn(input: OutsideFilesInput): Promise<Outs
   const commandFolders = [...new Set(input.commandFolders.map((dir) => path.resolve(dir)))]
     .filter((dir) => dir !== rootReal && !dir.startsWith(rootReal + path.sep) && !isWithheldPath(dir))
     .slice(0, 16);
-  const outside = await scanOutside({
+  const outside = input.box ? { entries: [] as OutsideEntry[], truncated: false, scanned: 0 } : await scanOutside({
     root: input.root,
     since: input.since,
     until: input.until,
@@ -257,7 +266,7 @@ export async function outsideFilesOfTurn(input: OutsideFilesInput): Promise<Outs
   // The files the commands named as written: found even where a busy folder's scan ran out of budget.
   const scanned = new Set(outside.entries.map((entry) => entry.absolute));
   const excluded = input.exclude.map((dir) => path.resolve(dir));
-  for (const file of [...new Set((input.commandFiles ?? []).map((item) => path.resolve(item)))].slice(0, MAX_FILES)) {
+  for (const file of [...new Set((input.box ? [] : input.commandFiles ?? []).map((item) => path.resolve(item)))].slice(0, MAX_FILES)) {
     if (scanned.has(file) || file === rootReal || file.startsWith(rootReal + path.sep) || excluded.some((dir) => file === dir || file.startsWith(dir + path.sep))) continue;
     const info = await lstat(file).catch(() => null);
     if (!info || (!info.isFile() && !info.isSymbolicLink())) continue;
@@ -317,6 +326,8 @@ export async function outsideFilesOfTurn(input: OutsideFilesInput): Promise<Outs
     scanned: outside.scanned + ignored.scanned,
     content_bytes: contentBytes,
     shared_window: input.sharedWindow,
+    host_scan: !input.box,
+    ...(input.box ? { host_scan_reason: "box" as const } : {}),
     timings_ms: timings,
   };
 }
