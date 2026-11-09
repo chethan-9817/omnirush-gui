@@ -1,7 +1,8 @@
 /**
  * MCP on the 2.x engine. Its plugins have no config hook, so the server applies the allowlist itself:
  * - the engine's gate (engine-gates.mjs) names the servers it may start at all: the server list's ids,
- *   plus the built-in computer use server while it is on;
+ *   plus the built-in computer use server while it is on, and the Work server's name (only the account's Work
+ *   folder gets it, while Work is on: work/engine.ts);
  * - each project's servers (the ones added in the app) go through the same filter as on the 1.x engine
  *   (mcp-allow.mjs, which also writes the report Settings > MCP shows) and reach the engine through its
  *   runtime MCP API, as direct tools (`codemode: false`: calls stay `<server>_<tool>`, never Code Mode).
@@ -10,7 +11,9 @@
  */
 import { computerUseBuiltins, computerUseDir } from "./computer-use/desktop.js";
 import { SERVER_ID } from "./computer-use/shared/contract.mjs";
-import { createMcpPolicyHooks, mcpServerEnvironment } from "./mcp-allow/mcp-allow.mjs";
+import { createMcpPolicyHooks, FIRST_PARTY_REMOTE, mcpServerEnvironment } from "./mcp-allow/mcp-allow.mjs";
+import { isV2WorkRoot, v2WorkMcp } from "./work/engine.js";
+import { workDir } from "./work/work.js";
 import { currentMcpPolicy, mcpPolicyFile, mcpReportDir, mcpWorkspaceDir, readWorkspaceMcp } from "./mcp-allow/state.js";
 
 const GATE_NAME = /^[A-Za-z0-9_.-]+$/;
@@ -45,7 +48,9 @@ export function v2McpGate(stateDir: string, env: Record<string, string | undefin
   const policy = currentMcpPolicy(stateDir);
   const ids = policy?.enabled ? policy.allow.map((entry) => entry.id) : [];
   const computerUse = computerUseBuiltins(computerUseDir(stateDir), env)[SERVER_ID] ? [SERVER_ID] : [];
-  return [...new Set([...ids, ...computerUse, ...(cloud ? [CLOUD_MCP_NAME] : [])])].filter((name) => GATE_NAME.test(name)).sort();
+  // The Work name always: Work can be turned on while the engine runs, and project files never add servers here
+  // (the gate drops project MCP config), so only desiredV2Mcp below can start it.
+  return [...new Set([...ids, ...computerUse, FIRST_PARTY_REMOTE.work.id, ...(cloud ? [CLOUD_MCP_NAME] : [])])].filter((name) => GATE_NAME.test(name)).sort();
 }
 
 /** One server's 2.x runtime config (the same fields the 1.x engine had), always a direct-tool server. */
@@ -72,8 +77,8 @@ export function v2McpConfig(value: Record<string, unknown>, engineEnv: Record<st
 export async function desiredV2Mcp(stateDir: string, root: string, engineEnv: Record<string, string>, gate: readonly string[], cloud: Record<string, unknown> | null = null): Promise<Record<string, Record<string, unknown>>> {
   try {
     const target: Record<string, unknown> = { mcp: readWorkspaceMcp(mcpWorkspaceDir(stateDir), root) };
-    // The built-in's name belongs to the app.
-    target.mcp = Object.fromEntries(Object.entries(target.mcp as Record<string, unknown>).filter(([name]) => !name.toLowerCase().startsWith(SERVER_ID)));
+    // The built-ins' names belong to the app.
+    target.mcp = Object.fromEntries(Object.entries(target.mcp as Record<string, unknown>).filter(([name]) => !name.toLowerCase().startsWith(SERVER_ID) && !name.toLowerCase().startsWith(FIRST_PARTY_REMOTE.work.id)));
     const hooks = createMcpPolicyHooks({
       directory: root, policyFile: mcpPolicyFile(stateDir), reportDir: mcpReportDir(stateDir),
       // The engine adds its whole environment under the entry's: values the server needs come from the person's.
@@ -100,6 +105,9 @@ export async function desiredV2Mcp(stateDir: string, root: string, engineEnv: Re
       const timeout = typeof cloud.timeout === "number" && cloud.timeout > 0 ? { timeout: { startup: cloud.timeout, catalog: cloud.timeout, execution: cloud.timeout } } : {};
       out[CLOUD_MCP_NAME] = { type: "remote", url: cloud.url, headers, ...(cloud.oauth === false ? { oauth: false } : {}), codemode: false, ...timeout };
     }
+    // Work mode: the account's Work folder gets the hosted connector server (through the app's local API).
+    const work = gate.includes(FIRST_PARTY_REMOTE.work.id) && isV2WorkRoot(workDir(stateDir), root) ? v2WorkMcp(engineEnv, workDir(stateDir)) : null;
+    if (work) out[FIRST_PARTY_REMOTE.work.id] = work;
     return out;
   } catch {
     return {};

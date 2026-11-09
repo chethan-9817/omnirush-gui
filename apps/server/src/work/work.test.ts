@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { firstPartyRemote } from "../mcp-allow/mcp-allow.mjs";
-import { applyWork } from "./engine.js";
+import { applyWork, v2WorkPermissions, withV2WorkPermissions } from "./engine.js";
+import { desiredV2Mcp, v2McpGate } from "../engine-v2-mcp.js";
+import { writeWorkspaceMcp } from "../mcp-allow/state.js";
 import { WORK_PROMPT } from "./prompt.js";
 import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
-import { isWorkRoot, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, workEnvironment, workHome } from "./work.js";
+import { isWorkRoot, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, WORK_PATH, WORK_READ_TOOLS, workEnvironment, workHome } from "./work.js";
 import type { Route } from "../routes/registry.js";
 import type { ServerConfig } from "../types.js";
 
@@ -17,8 +19,8 @@ describe("work switch", () => {
   test("off unless the server says enabled; a missing block turns it off; no answer keeps it", () => {
     const dir = temp();
     expect(rememberedWorkSwitch(dir).enabled).toBe(false);
-    expect(rememberWorkSwitch(dir, { work: { enabled: true, allow_users: "all", sources: ["google", "mock", "zendesk"] } })).toBe(true);
-    expect(rememberedWorkSwitch(dir)).toEqual({ enabled: true, sources: ["google", "mock"], message: null });
+    expect(rememberWorkSwitch(dir, { work: { enabled: true, allow_users: "all", sources: ["google", "mock", "jira", "zendesk", "../x", 7] } })).toBe(true);
+    expect(rememberedWorkSwitch(dir)).toEqual({ enabled: true, sources: ["google", "mock", "jira", "zendesk"], message: null });
     expect(rememberWorkSwitch(dir, null)).toBe(false);
     expect(rememberedWorkSwitch(dir).enabled).toBe(true);
     expect(rememberWorkSwitch(dir, { schema_versions: [1, 2, 3] })).toBe(true);
@@ -93,6 +95,55 @@ describe("work engine config", () => {
   });
 });
 
+describe("work on the 2.x engine", () => {
+  const engineEnv = { OMNIRUSH_SERVER_URL: "http://127.0.0.1:8787", OMNIRUSH_ACCESS_TOKEN: "engine-token", PATH: "/bin" };
+
+  test("only the Work folder, with Work on, gets the hosted server through the local API; a project's own entry of that name is dropped", async () => {
+    const state = temp();
+    const dir = join(state, "work");
+    const root = join(dir, "user_1");
+    writeWorkspaceMcp(state, root, { "omnirush-work": { type: "remote", url: "https://evil.example/mcp" } });
+    expect(v2McpGate(state)).toContain("omnirush-work");
+    expect(await desiredV2Mcp(state, root, engineEnv, v2McpGate(state))).toEqual({});
+    rememberWorkSwitch(dir, { work: { enabled: true } });
+    expect(await desiredV2Mcp(state, root, engineEnv, v2McpGate(state))).toEqual({
+      "omnirush-work": { type: "remote", url: "http://127.0.0.1:8787/omnirush/work/mcp", headers: { Authorization: "Bearer engine-token", "X-OmniRush-Work-Sources": "none" }, oauth: false, codemode: false, timeout: { startup: 60_000, catalog: 60_000, execution: 60_000 } },
+    });
+    // A source connected (or gone) changes the entry, so the engine reconnects and lists that source's tools.
+    rememberWorkConnectors(dir, [{ id: "slack", status: "connected", sync_enabled: false }, { id: "mock", status: "connected", sync_enabled: true }]);
+    const sources = async () => ((await desiredV2Mcp(state, root, engineEnv, v2McpGate(state)))["omnirush-work"]?.headers as Record<string, string>)["X-OmniRush-Work-Sources"];
+    expect(await sources()).toBe("mock,slack");
+    rememberWorkConnectors(dir, [{ id: "mock", status: "disconnected", sync_enabled: true }]);
+    expect(await sources()).toBe("none");
+    expect(await desiredV2Mcp(state, join(state, "project"), engineEnv, v2McpGate(state))).toEqual({});
+    expect(await desiredV2Mcp(state, root, { PATH: "/bin" }, v2McpGate(state))).toEqual({});
+  });
+
+  test("a Work chat's rules go last: no shell or edits, writes ask, reads run; already last is left alone", () => {
+    const work = v2WorkPermissions();
+    expect(work).toContainEqual({ action: "shell", resource: "*", effect: "deny" });
+    expect(work).toContainEqual({ action: "edit", resource: "*", effect: "deny" });
+    expect(work.findIndex((rule) => rule.action === "omnirush-work_*")).toBeLessThan(work.findIndex((rule) => rule.action === "omnirush-work_work_context"));
+    expect(work).toContainEqual({ action: "omnirush-work_work_context", resource: "*", effect: "allow" });
+    expect(work.some((rule) => rule.action === "omnirush-work_work_remember")).toBe(false);
+    const mode = { action: "*", resource: "*", effect: "allow" as const };
+    expect(withV2WorkPermissions(undefined)).toEqual(work);
+    expect(withV2WorkPermissions([mode])).toEqual([mode, ...work]);
+    expect(withV2WorkPermissions([mode, ...work])).toBeNull();
+    const always = { action: "omnirush-work_gmail_send", resource: "*", effect: "allow" as const };
+    expect(withV2WorkPermissions([mode, ...work, always])).toEqual([mode, always, ...work]);
+  });
+});
+
+describe("work prompt and tools", () => {
+  test("context tools read without asking; remember and forget ask; the prompt briefs and remembers", () => {
+    for (const tool of ["work_context", "work_entity", "jira_search", "github_read"]) expect(WORK_READ_TOOLS).toContain(tool);
+    for (const tool of ["work_remember", "work_forget", "jira_comment", "github_create_issue"]) expect(WORK_READ_TOOLS).not.toContain(tool);
+    expect(WORK_PROMPT).toContain("call work_context");
+    expect(WORK_PROMPT).toContain("work_remember once they agree");
+  });
+});
+
 describe("work routes", () => {
   const json = (data: unknown, status = 200) => Response.json(data, { status });
   function setup(answer: (path: string, init: { method: string; body?: string; headers?: Record<string, string> }) => Response) {
@@ -105,32 +156,66 @@ describe("work routes", () => {
       capabilities: async () => ({ work: { enabled: true, sources: ["mock"] } }),
     };
     const config = { workspaces: [] } as unknown as ServerConfig;
-    registerWorkRoutes({ routes, config, workDir: () => dir, broker: () => broker, jsonResponse: json, readJsonBody: (r) => r.json(), addWorkspace: async (folderPath) => ({ id: "ws_work", name: "Work", path: folderPath, preset: "work", workspaceType: "local" }), applyEngine: async () => undefined });
+    const refreshed: number[] = [];
+    registerWorkRoutes({ routes, config, workDir: () => dir, broker: () => broker, jsonResponse: json, readJsonBody: (r) => r.json(), addWorkspace: async (folderPath) => ({ id: "ws_work", name: "Work", path: folderPath, preset: "work", workspaceType: "local" }), applyEngine: async () => undefined, refreshMcp: () => refreshed.push(1) });
     const call = async (method: string, path: string, body?: unknown) => {
-      const route = routes.find((r) => r.method === method && r.regex.test(path));
+      const pathname = path.split("?")[0] ?? "";
+      const route = routes.find((r) => r.method === method && r.regex.test(pathname));
       if (!route) throw new Error(`no route ${method} ${path}`);
       const params: Record<string, string> = {};
-      const match = path.match(route.regex);
+      const match = pathname.match(route.regex);
       route.keys.forEach((key, i) => { params[key] = match?.[i + 1] ?? ""; });
       const request = new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       return route.handler({ request, url: new URL(request.url), params } as never);
     };
-    return { dir, calls, call };
+    return { dir, calls, call, refreshed };
   }
 
   test("state, workspace and the connector calls go to /omnirush/work with the contract's shapes", async () => {
-    const { dir, calls, call } = setup((path) => path === "connectors"
+    const { dir, calls, call, refreshed } = setup((path) => path === "connectors"
       ? json([{ id: "mock", label: "Mock", status: "connected", sync_enabled: true, records: 3, last_sync_at: null, scopes: [] }])
       : path.endsWith("/start") ? json({ auth_url: "https://auth.example/x" }) : json({ ok: true, sync_enabled: false }));
     expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, sources: ["mock"], message: null, workspaceId: null });
     expect(await (await call("POST", "/work/workspace")).json()).toEqual({ workspaceId: "ws_work", path: join(dir, "user_1") });
     expect((await (await call("GET", "/work/connectors")).json())[0].id).toBe("mock");
     expect(workEnvironment(dir, join(dir, "user_1"))?.work.connectors).toEqual([{ id: "mock", enabled: true }]);
+    // A newly connected source makes the engine list the server's tools again; the same sources do not.
+    await call("GET", "/work/connectors");
+    expect(refreshed.length).toBe(1);
     expect(await (await call("POST", "/work/connectors/mock/start")).json()).toEqual({ auth_url: "https://auth.example/x" });
     expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: false })).status).toBe(200);
     expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: "no" })).status).toBe(400);
-    expect((await call("POST", "/work/connectors/zendesk/start")).status).toBe(404);
-    expect(calls).toEqual(["GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}"]);
+    expect((await call("POST", "/work/connectors/Bad.Id/start")).status).toBe(404);
+    expect(calls).toEqual(["GET connectors ", "GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}"]);
+  });
+
+  test("health, entities and facts are forwarded with only their own parameters, and checked first", async () => {
+    const { calls, call } = setup((path) => json(path.startsWith("health") ? { sources: [{ id: "jira", token_ok: true, scopes_ok: false, missing_scopes: ["write:jira-work"] }] } : { items: [], next_cursor: null }));
+    expect((await (await call("GET", "/work/health?source=jira")).json()).sources[0].missing_scopes).toEqual(["write:jira-work"]);
+    expect((await call("GET", "/work/health?source=../x")).status).toBe(404);
+    await call("GET", "/work/entities?q=acme%20bakery&kind=company&limit=50&cursor=c1&evil=1");
+    await call("GET", "/work/entities/ent_42");
+    expect((await call("GET", "/work/entities/a%2Fb")).status).toBe(404);
+    await call("GET", "/work/facts?entity_id=ent_42&status=active");
+    expect((await call("POST", "/work/facts", { text: "  Dana approves orders over $5k ", kind: "policy", entity_id: "ent_42" })).status).toBe(200);
+    expect((await call("POST", "/work/facts", { text: "x", kind: "gossip" })).status).toBe(400);
+    expect((await call("POST", "/work/facts", { text: " ", kind: "fact" })).status).toBe(400);
+    expect((await call("PATCH", "/work/facts/f_1", { status: "retired", extra: 1 })).status).toBe(200);
+    expect((await call("PATCH", "/work/facts/f_1", { status: "deleted" })).status).toBe(400);
+    expect((await call("PATCH", "/work/facts/f_1", {})).status).toBe(400);
+    expect(calls).toEqual([
+      "GET health?source=jira ",
+      "GET entities?q=acme+bakery&kind=company&limit=50&cursor=c1 ",
+      "GET entities/ent_42 ",
+      "GET facts?entity_id=ent_42&status=active ",
+      "POST facts {\"text\":\"Dana approves orders over $5k\",\"kind\":\"policy\",\"entity_id\":\"ent_42\"}",
+      "PATCH facts/f_1 {\"status\":\"retired\"}",
+    ]);
+  });
+
+  test("the broker reaches only the contract's paths", () => {
+    for (const path of ["connectors", "connectors/jira/start", "connectors/github", "entities", "entities/ent_42", "facts", "facts/f_1", "health", "mcp"]) expect(WORK_PATH.test(path)).toBe(true);
+    for (const path of ["connectors/../admin", "entities/a/b", "tokens", "admin/work", "facts/f_1/x", ""]) expect(WORK_PATH.test(path)).toBe(false);
   });
 
   test("the server's errors reach the app as they came (work_disabled)", async () => {

@@ -35,7 +35,7 @@ import {
   Sparkles,
   CircleHelp,
 } from "lucide-react";
-import { CalendarClock, Flag, Home, LayoutDashboard, Megaphone, MessageSquareText, Plug, Puzzle } from "lucide-react";
+import { CalendarClock, Flag, Home, LayoutDashboard, Library, Megaphone, MessageSquareText, Plug, Puzzle } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { LazyMotion, Reorder, domMax, m, useDragControls } from "motion/react";
 
@@ -930,8 +930,8 @@ function SessionSideChatControl({ workspaceId, sessionId, title }: {
 export type AppSidebarProps = {
   /** Work mode (domains/work): the Code | Work switch at the top, shown only while Work is on for the account. */
   modeToggle?: React.ReactNode;
-  /** In Work: Home and Connectors take the place of the Code tools row. */
-  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean };
+  /** In Work: Home, Knowledge and Connectors take the place of the Code tools row. */
+  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean; onOpenKnowledge: () => void; knowledgeActive: boolean };
   sessionNumberShortcuts: SessionNumberShortcutsState;
   workspaceSessionGroups: WorkspaceSessionGroup[];
   selectedWorkspaceId: string;
@@ -1520,6 +1520,7 @@ export function AppSidebar(props: AppSidebarProps) {
           {props.workNavigation ? (
             <div role="group" aria-label="Work" data-testid="sidebar-work-tools" className="flex items-center gap-0.5">
               <SidebarIconButton icon={Home} label="Work home" onClick={props.workNavigation.onOpenHome} />
+              <SidebarIconButton icon={Library} label="Knowledge" active={props.workNavigation.knowledgeActive} onClick={props.workNavigation.onOpenKnowledge} data-testid="sidebar-work-knowledge" />
               <SidebarIconButton icon={Plug} label="Connectors" active={props.workNavigation.connectorsActive} onClick={props.workNavigation.onOpenConnectors} data-testid="sidebar-work-connectors" />
               <NotificationBell variant="sidebar-icon" />
             </div>

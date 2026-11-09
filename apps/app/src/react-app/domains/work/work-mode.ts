@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkState } from "@/app/lib/omnirush-server";
+import type { OmniRushServerClient, OmniRushWorkConnector, OmniRushWorkEntitySummary, OmniRushWorkHealth, OmniRushWorkState } from "@/app/lib/omnirush-server";
 
 /** The window's top-level mode: Code (today's app) or Work (business chats). Remembered across restarts. */
 export type AppMode = "code" | "work";
@@ -10,6 +10,7 @@ export type AppMode = "code" | "work";
 export const WORK_PRESET = "work";
 export const WORK_HOME_ROUTE = "/work";
 export const WORK_CONNECTORS_ROUTE = "/work/connectors";
+export const WORK_KNOWLEDGE_ROUTE = "/work/knowledge";
 
 type WorkModeStore = { mode: AppMode; setMode: (mode: AppMode) => void };
 
@@ -20,10 +21,12 @@ export const useWorkModeStore = create<WorkModeStore>()(
   }),
 );
 
-export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"> & { baseUrl?: string };
+export type WorkClient = Pick<OmniRushServerClient, "getWorkState" | "ensureWorkWorkspace" | "listWorkConnectors" | "startWorkConnector" | "disconnectWorkConnector" | "setWorkConnectorSync"
+  | "getWorkHealth" | "listWorkEntities" | "getWorkEntity" | "addWorkFact" | "updateWorkFact"> & { baseUrl?: string };
 
 export const workStateKey = (client: WorkClient | null) => ["omnirush-work-state", client?.baseUrl?.trim() || "default"];
 export const workConnectorsKey = (client: WorkClient | null) => ["omnirush-work-connectors", client?.baseUrl?.trim() || "default"];
+export const workEntityKey = (client: WorkClient | null, id: string) => ["omnirush-work-entity", client?.baseUrl?.trim() || "default", id];
 
 /** The server's Work switch (re-read every 60 s); Work is hidden entirely while it is off or unknown. */
 export function useWorkState(client: WorkClient | null) {
@@ -124,4 +127,55 @@ export function workToolPermission(permission: string): { label: string; scope: 
   const action = WORK_ACTIONS[rest.join("_")] ?? (rest.join(" ") || tool).replace(/^./, (c) => c.toUpperCase());
   const name = WORK_APPS[app] ?? app;
   return { label: `${action} (${name})`, scope: `Your ${name} account` };
+}
+
+/** Connector names for ids the server lists without a label; an unknown id shows as it is (with a generic icon). */
+export const CONNECTOR_LABELS: Record<string, string> = {
+  google: "Google", microsoft: "Microsoft 365", slack: "Slack", hubspot: "HubSpot", quickbooks: "QuickBooks Online",
+  notion: "Notion", jira: "Jira", confluence: "Confluence", linear: "Linear", github: "GitHub", mock: "Test source",
+};
+export const connectorLabel = (id: string, label?: string | null) => label?.trim() || CONNECTOR_LABELS[id] || id;
+
+/** One source's row of a GET /work/health answer (a list, or `{sources}` / `{items}`); null when absent. */
+export function healthFor(answer: unknown, id: string): OmniRushWorkHealth | null {
+  const box = answer && typeof answer === "object" ? (answer as Record<string, unknown>) : null;
+  const rows = Array.isArray(answer) ? answer : Array.isArray(box?.sources) ? box.sources : Array.isArray(box?.items) ? box.items : [];
+  const row = rows.find((item): item is OmniRushWorkHealth => Boolean(item) && typeof item === "object" && (item as { id?: unknown }).id === id);
+  return row ?? null;
+}
+
+/** What a health check says, in a line: missing scopes (reconnect), a failed check or the last error; null when all is well. */
+export function healthProblem(health: OmniRushWorkHealth | null): { text: string; reconnect: boolean } | null {
+  if (!health) return null;
+  const missing = (health.missing_scopes ?? []).filter(Boolean);
+  if (missing.length || health.scopes_ok === false) {
+    return { text: `Missing permissions${missing.length ? `: ${missing.join(", ")}` : ""}. Reconnect to grant them.`, reconnect: true };
+  }
+  if (health.token_ok === false) return { text: "Sign-in expired or revoked. Reconnect.", reconnect: true };
+  const failed = (health.checks ?? []).find((check) => !check.ok);
+  if (failed) return { text: `${failed.name} failed${failed.detail ? `: ${failed.detail}` : ""}`, reconnect: false };
+  if (health.last_error) return { text: health.last_error, reconnect: false };
+  return null;
+}
+
+export const ENTITY_KINDS = [
+  { id: "person", label: "People" },
+  { id: "company", label: "Companies" },
+  { id: "deal", label: "Deals" },
+  { id: "project", label: "Projects" },
+  { id: "product", label: "Products" },
+  { id: "other", label: "Other" },
+] as const;
+
+export const FACT_KINDS = [
+  { id: "fact", label: "Fact" },
+  { id: "decision", label: "Decision" },
+  { id: "preference", label: "Preference" },
+  { id: "policy", label: "Policy" },
+  { id: "contact_note", label: "Contact note" },
+] as const;
+
+/** "Ask about this": the brief a Work chat starts with, so the agent calls work_context on the entity first. */
+export function askAboutPrompt(entity: Pick<OmniRushWorkEntitySummary, "id" | "kind" | "name">): string {
+  return `Brief me on ${entity.name} (${entity.kind}). Call work_context for "${entity.name}" first (entity id ${entity.id}), then summarise who or what this is, our recent history across every source, open items and anything we decided or agreed to remember, with links to the sources.`;
 }

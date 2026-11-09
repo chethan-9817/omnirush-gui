@@ -1,6 +1,9 @@
 /** @jsxImportSource react */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Briefcase, CalendarDays, Code2, Inbox, LifeBuoy, Plug, Receipt, Search, TrendingUp } from "lucide-react";
+import {
+  ArrowUp, BookOpen, Briefcase, Calculator, CalendarDays, Cloud, Code2, FileText, Github, Handshake, Hash, Inbox, Kanban, LifeBuoy, Mail, Plug,
+  Receipt, Search, Shapes, Ticket, TrendingUp, type LucideIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import type { OmniRushWorkConnector } from "@/app/lib/omnirush-server";
+import type { OmniRushWorkConnector, OmniRushWorkHealth } from "@/app/lib/omnirush-server";
 import { cn } from "@/lib/utils";
 
 import { useNavigate } from "react-router";
@@ -21,7 +24,21 @@ import {
   LayoutSectionItemTitle,
 } from "@/react-app/domains/settings/settings-layout";
 
-import { connectSettled, countLabel, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES, workConnectorsKey, type AppMode, type WorkClient } from "./work-mode";
+import {
+  connectorLabel, connectSettled, countLabel, healthFor, healthProblem, useWorkState, visibleConnectors, WORK_CONNECTORS_ROUTE, WORK_TEMPLATES, workConnectorsKey,
+  type AppMode, type WorkClient,
+} from "./work-mode";
+
+const CONNECTOR_ICONS: Record<string, LucideIcon> = {
+  google: Mail, microsoft: Cloud, slack: Hash, hubspot: Handshake, quickbooks: Calculator, notion: FileText,
+  jira: Ticket, confluence: BookOpen, linear: Kanban, github: Github, mock: Shapes,
+};
+
+/** A connector's icon; an id the app does not know gets the generic plug. */
+export function ConnectorIcon(props: { id: string; className?: string }) {
+  const Icon = CONNECTOR_ICONS[props.id] ?? Plug;
+  return <Icon aria-hidden className={cn("size-4 shrink-0 text-muted-foreground", props.className)} data-connector-icon={CONNECTOR_ICONS[props.id] ? props.id : "generic"} />;
+}
 
 const TEMPLATE_ICONS: Record<(typeof WORK_TEMPLATES)[number]["id"], ReactNode> = {
   inbox: <Inbox />,
@@ -171,14 +188,21 @@ export function ConnectorRow(props: {
   onConnect: () => void;
   onDisconnect: () => void;
   onSync: (enabled: boolean) => void;
+  /** The source's last health check (GET /work/health); undefined: not checked yet. */
+  health?: OmniRushWorkHealth | null;
+  checking?: boolean;
+  onCheck?: () => void;
 }) {
   const row = props.connector;
   const connected = row.status === "connected" || row.status === "syncing" || row.status === "error";
+  const problem = healthProblem(props.health ?? null);
+  const reconnect = row.status === "error" || Boolean(problem?.reconnect);
   return (
     <div className="flex items-center gap-4 border-b border-border px-4 py-3 last:border-b-0" data-work-connector={row.id} data-status={row.status}>
+      <ConnectorIcon id={row.id} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{row.label}</span>
+          <span className="text-sm font-medium">{connectorLabel(row.id, row.label)}</span>
           <Badge variant={row.status === "error" ? "destructive" : row.status === "disconnected" ? "outline" : "secondary"} data-testid="work-connector-status">
             {props.connecting ? "Waiting for sign-in…" : STATUS_LABEL[row.status]}
           </Badge>
@@ -190,6 +214,11 @@ export function ConnectorRow(props: {
               ? [row.account, countLabel(row.records, "record"), lastSync(row.last_sync_at)].filter(Boolean).join(" · ")
               : "Connect to let the agent search and use it."}
         </div>
+        {connected && props.health !== undefined ? (
+          <div className={cn("mt-0.5 text-[12px]", problem ? "text-destructive" : "text-muted-foreground")} data-testid="work-connector-health">
+            {props.health === null ? "No health report for this source yet." : problem ? problem.text : "All checks passed."}
+          </div>
+        ) : null}
       </div>
       {connected ? (
         <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
@@ -202,10 +231,16 @@ export function ConnectorRow(props: {
           />
         </label>
       ) : null}
-      {connected && row.status !== "error" ? (
+      {connected && props.onCheck ? (
+        <Button variant="ghost" size="sm" disabled={props.checking} onClick={props.onCheck}>{props.checking ? "Checking…" : "Check"}</Button>
+      ) : null}
+      {connected && reconnect ? (
+        <Button size="sm" disabled={props.busy || props.connecting} onClick={props.onConnect}>Reconnect</Button>
+      ) : null}
+      {connected ? (
         <Button variant="outline" size="sm" disabled={props.busy} onClick={props.onDisconnect}>Disconnect</Button>
       ) : (
-        <Button size="sm" disabled={props.busy || props.connecting} onClick={props.onConnect}>{row.status === "error" ? "Reconnect" : "Connect"}</Button>
+        <Button size="sm" disabled={props.busy || props.connecting} onClick={props.onConnect}>Connect</Button>
       )}
     </div>
   );
@@ -216,6 +251,7 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
   const queryClient = useQueryClient();
   const key = workConnectorsKey(props.client);
   const [connecting, setConnecting] = useState<string | null>(null);
+  const [health, setHealth] = useState<Record<string, OmniRushWorkHealth | null>>({});
   const connectStarted = useRef(0);
   const query = useQuery({
     queryKey: key,
@@ -246,6 +282,14 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
     onError,
   });
   const disconnect = useMutation({ mutationFn: (id: string) => props.client!.disconnectWorkConnector(id), onSuccess: refresh, onError });
+  const check = useMutation({
+    mutationFn: async (id: string) => healthFor(await props.client!.getWorkHealth(id), id),
+    onSuccess: (found, id) => {
+      setHealth((current) => ({ ...current, [id]: found }));
+      void refresh();
+    },
+    onError,
+  });
   const sync = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => props.client!.setWorkConnectorSync(id, enabled),
     onSuccess: refresh,
@@ -279,6 +323,9 @@ export function WorkConnectorsPage(props: { client: WorkClient | null; openLink:
               onConnect={() => connect.mutate(row.id)}
               onDisconnect={() => disconnect.mutate(row.id)}
               onSync={(enabled) => sync.mutate({ id: row.id, enabled })}
+              health={health[row.id]}
+              checking={check.isPending && check.variables === row.id}
+              onCheck={() => check.mutate(row.id)}
             />
           ))}
         </div>
@@ -296,7 +343,7 @@ export function WorkConnectorsSetting(props: { client: WorkClient | null }) {
     <LayoutSectionItem>
       <LayoutSectionItemHeader>
         <LayoutSectionItemTitle>Work connectors</LayoutSectionItemTitle>
-        <LayoutSectionItemDescription>Connect Google, Microsoft 365, Slack, HubSpot, QuickBooks or Notion for Work chats.</LayoutSectionItemDescription>
+        <LayoutSectionItemDescription>Connect your mail, chat, documents, CRM, tickets and accounting for Work chats.</LayoutSectionItemDescription>
         <LayoutSectionItemHeaderActions>
           <Button variant="outline" size="sm" data-testid="settings-work-connectors" onClick={() => navigate(WORK_CONNECTORS_ROUTE)}>Open</Button>
         </LayoutSectionItemHeaderActions>

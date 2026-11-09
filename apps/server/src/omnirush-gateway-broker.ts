@@ -19,6 +19,7 @@ import { BOX_HEADER, MODEL_NOT_IN_MODE, notInModeMessage, projectMode } from "./
 import { MODE_NOT_BOUND, MODEL_NOT_BOUND, REFUSED_HEADER, SESSION_BIND_UNCONFIRMED, STRICT_SESSION_HEADER, SESSION_BINDING_CONFLICT, SESSION_MODEL_USED, VERIFICATION_REQUIRED, sessionBinder, strictSessions, type StrictSessions } from "./model-modes/strict-sessions.mjs";
 import { ClaudeDeviceAccess, type ClaudeAuthorization, type ClaudeDeviceRequest } from "./claude-code/access.js";
 import { stockMode } from "./stock-mode/stock-mode.mjs";
+import { WORK_PATH } from "./work/work.js";
 
 /** A main chat's request on another model than the one it started on (one model per chat). */
 const SESSION_MODEL_FIXED = "session_model_fixed";
@@ -1976,14 +1977,15 @@ export class OmniRushGatewayBroker {
    * request: a 401 is returned as it is, with no refresh and no second try.
    */
   /**
-   * A Work mode call (`/omnirush/work/<path>`: connectors, the hosted MCP server), with the device bearer and
+   * A Work mode call (`/omnirush/work/<path>[?query]`: connectors, knowledge, health, the hosted MCP server), with the device bearer and
    * the same bounded 401 refresh. Only the contract's paths; the answer is returned as it came.
    */
   workRequest(path: string, init: { method: "GET" | "POST" | "PATCH"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }): Promise<Response> {
-    if (!/^(connectors(\/(google|microsoft|slack|hubspot|quickbooks|notion|mock)(\/(start|disconnect))?)?|mcp)$/.test(path)) {
+    const [bare = "", query] = path.split("?", 2);
+    if (!WORK_PATH.test(bare)) {
       return Promise.resolve(Response.json({ detail: "unsupported_work_path" }, { status: 404 }));
     }
-    return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, `work/${path}`), {
+    return this.withDeviceBearer((state) => this.fetcher(`${apiUrl(state.gatewayUrl, `work/${bare}`)}${query ? `?${new URLSearchParams(query)}` : ""}`, {
       method: init.method,
       headers: {
         Accept: "application/json",

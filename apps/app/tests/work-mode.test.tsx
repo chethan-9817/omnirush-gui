@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { OmniRushWorkConnector } from "../src/app/lib/omnirush-server";
-import { connectSettled, countLabel, isWorkModeShortcut, shownInMode, visibleConnectors, WORK_TEMPLATES, workToolPermission } from "../src/react-app/domains/work/work-mode";
-import { ConnectorRow, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
+import { askAboutPrompt, connectSettled, countLabel, healthFor, healthProblem, isWorkModeShortcut, shownInMode, visibleConnectors, WORK_TEMPLATES, workToolPermission } from "../src/react-app/domains/work/work-mode";
+import { ConnectorIcon, ConnectorRow, WorkHome, WorkModeToggle } from "../src/react-app/domains/work/work-views";
+import { actorNames, EntityDetail } from "../src/react-app/domains/work/knowledge-views";
 
 const row = (over: Partial<OmniRushWorkConnector>): OmniRushWorkConnector => ({
   id: "google", label: "Google", status: "disconnected", last_sync_at: null, records: 0, sync_enabled: false, ...over,
@@ -86,5 +87,75 @@ describe("Work mode", () => {
     const off = renderToStaticMarkup(<ConnectorRow connector={row({})} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />);
     expect(off).toContain(">Connect<");
     expect(off).not.toContain('role="switch"');
+  });
+
+  test("an errored source offers Reconnect and Disconnect; Check shows missing scopes with a Reconnect prompt", () => {
+    const error = renderToStaticMarkup(<ConnectorRow connector={row({ status: "error", error: "reconnect_required" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onCheck={noop} />);
+    expect(error).toContain(">Reconnect<");
+    expect(error).toContain(">Disconnect<");
+    expect(error).toContain(">Check<");
+    const scopes = renderToStaticMarkup(
+      <ConnectorRow connector={row({ id: "jira", label: "Jira", status: "connected", records: 3, sync_enabled: true })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onCheck={noop}
+        health={{ id: "jira", token_ok: true, scopes_ok: false, missing_scopes: ["write:jira-work"] }} />,
+    );
+    expect(scopes).toContain("Missing permissions: write:jira-work");
+    expect(scopes).toContain(">Reconnect<");
+    const fine = renderToStaticMarkup(
+      <ConnectorRow connector={row({ status: "connected" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} onCheck={noop} health={{ id: "google", token_ok: true, scopes_ok: true, checks: [{ name: "profile", ok: true }] }} />,
+    );
+    expect(fine).toContain("All checks passed.");
+    expect(fine).not.toContain(">Reconnect<");
+  });
+
+  test("health answers: a list or {sources}; a failed check or last error is the line shown", () => {
+    expect(healthFor({ sources: [{ id: "slack", last_error: "rate_limited" }] }, "slack")?.last_error).toBe("rate_limited");
+    expect(healthFor([{ id: "slack" }], "google")).toBeNull();
+    expect(healthProblem({ id: "x", checks: [{ name: "profile", ok: false, detail: "401" }] })).toEqual({ text: "profile failed: 401", reconnect: false });
+    expect(healthProblem({ id: "x", token_ok: false })?.reconnect).toBe(true);
+    expect(healthProblem({ id: "x", last_error: "timeout" })?.text).toBe("timeout");
+    expect(healthProblem({ id: "x", token_ok: true, scopes_ok: true })).toBeNull();
+  });
+
+  test("new connectors get their icon, an unknown id the generic one", () => {
+    for (const id of ["jira", "confluence", "linear", "github"]) expect(renderToStaticMarkup(<ConnectorIcon id={id} />)).toContain(`data-connector-icon="${id}"`);
+    expect(renderToStaticMarkup(<ConnectorIcon id="zendesk" />)).toContain('data-connector-icon="generic"');
+    expect(renderToStaticMarkup(<ConnectorRow connector={row({ id: "zendesk", label: "" })} connecting={false} busy={false} onConnect={noop} onDisconnect={noop} onSync={noop} />)).toContain(">zendesk<");
+  });
+
+  test("an entity shows keys, sources, remembered facts (retired hidden), a timeline newest first and related entities", () => {
+    const markup = renderToStaticMarkup(
+      <EntityDetail
+        busy={false} openLink={noop} onAsk={noop} onSelect={noop} onAddFact={noop} onSaveFact={noop} onRetireFact={noop}
+        detail={{
+          entity: { id: "ent_1", kind: "company", name: "Acme Bakery", keys: ["acme-bakery.test", "hubspot:company:77"], record_count: 12, sources: ["google", "hubspot"], last_activity_at: "2026-11-08T10:00:00Z" },
+          records: [
+            { source_id: "gmail:old", source: "google", kind: "email", subject: "Old quote", occurred_at: "2026-10-01T10:00:00Z", actors: [{ name: "Dana" }] },
+            { source_id: "hubspot:deal:9", source: "hubspot", kind: "deal", subject: "Catering 2027", occurred_at: "2026-11-08T10:00:00Z", actors: ["sales@acme.test"], url: "https://app.hubspot.example/deal/9" },
+          ],
+          facts: [
+            { id: "f1", kind: "policy", text: "Never discount more than 10%.", status: "active", created_by: "user" },
+            { id: "f2", kind: "fact", text: "Old address", status: "retired" },
+          ],
+          related: [{ id: "ent_2", kind: "person", name: "Dana Lee", reason: "email" }],
+        }}
+      />,
+    );
+    expect(markup).toContain("Acme Bakery");
+    expect(markup).toContain("acme-bakery.test");
+    expect(markup).toContain("Never discount more than 10%.");
+    expect(markup).not.toContain("Old address");
+    expect(markup).toContain(">Retire<");
+    expect(markup.indexOf("Catering 2027")).toBeLessThan(markup.indexOf("Old quote"));
+    expect(markup).toContain('aria-label="Open at the source"');
+    expect(markup).toContain('data-work-related="ent_2"');
+    expect(markup).toContain("Ask about this");
+    expect(actorNames([{ name: "Dana" }, { email: "x@y.test" }, "Sam", 5])).toBe("Dana, x@y.test, Sam");
+  });
+
+  test("Ask about this briefs the chat through work_context on that entity", () => {
+    const prompt = askAboutPrompt({ id: "ent_1", kind: "company", name: "Acme Bakery" });
+    expect(prompt).toContain("work_context");
+    expect(prompt).toContain("Acme Bakery");
+    expect(prompt).toContain("ent_1");
   });
 });
