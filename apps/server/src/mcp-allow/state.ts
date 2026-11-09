@@ -7,6 +7,7 @@
 // The engine gets the three paths in its environment; its plugin
 // (opencode-plugins/omnirush-mcp-policy.ts) reads them at each project's start.
 import { computerUseEngineEnv } from "../computer-use/desktop.js";
+import { WORK_DIR_ENV, workDir } from "../work/work.js";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -56,6 +57,8 @@ export function mcpEngineEnv(stateDir: string, env: Record<string, string | unde
     OMNIRUSH_MCP_FILTER: "required",
     // The built-in computer use server (computer-use/desktop.ts), read by the same plugin.
     ...computerUseEngineEnv(stateDir),
+    // Work mode (work/engine.ts): the switch and the Work folders, read by the same plugin.
+    [WORK_DIR_ENV]: workDir(stateDir, env),
   };
 }
 

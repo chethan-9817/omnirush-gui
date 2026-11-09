@@ -31,6 +31,8 @@ import {
 import { DesktopIntegrationSection } from "../desktop-integration-section";
 import { SubagentModelSettings } from "../subagent-model-settings";
 import { WebSearchSetting, type WebSearchClient } from "../web-search-setting";
+import { WorkConnectorsSetting } from "@/react-app/domains/work/work-views";
+import type { WorkClient } from "@/react-app/domains/work/work-mode";
 import type { SubagentModelClient } from "../subagent-model";
 
 export type PreferencesViewProps = {
@@ -49,6 +51,8 @@ export type PreferencesViewProps = {
   subagentModelClient?: SubagentModelClient | null;
   /** The server whose web search switch the Model section shows; hidden without one. */
   webSearchClient?: WebSearchClient | null;
+  /** Work mode: the link to Work > Connectors (shown only while Work is on for the account). */
+  workClient?: WorkClient | null;
 };
 
 function desktopNotificationPreferenceLabel(value: DesktopNotificationPreference) {
@@ -109,6 +113,7 @@ export function PreferencesView(props: PreferencesViewProps) {
 
         {/* Web search */}
         <WebSearchSetting client={props.webSearchClient ?? null} busy={props.busy} />
+        {props.workClient ? <WorkConnectorsSetting client={props.workClient} /> : null}
 
         {/* Show reasoning */}
         <LayoutSectionItem>

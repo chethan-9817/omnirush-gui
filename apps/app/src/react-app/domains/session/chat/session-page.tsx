@@ -156,6 +156,10 @@ export type SessionPageHistoryControls = {
 };
 
 export type SessionPageSidebarProps = {
+  /** Work mode (domains/work): the Code | Work switch at the top, shown only while Work is on for the account. */
+  modeToggle?: React.ReactNode;
+  /** In Work: Home and Connectors take the place of the Code tools row. */
+  workNavigation?: { onOpenHome: () => void; onOpenConnectors: () => void; connectorsActive: boolean };
   workspaceSessionGroups: WorkspaceSessionGroup[];
   selectedWorkspaceId: string;
   selectedSessionId: string | null;
@@ -299,6 +303,8 @@ export type SessionPageProps = {
   settingsSlot?: React.ReactNode;
   /** Workspace-scoped first-class surface rendered in place of the conversation. */
   primarySlot?: React.ReactNode;
+  /** A Work mode chat (domains/work): the chat alone, no IDE layout, editor or terminal. */
+  workChat?: boolean;
   primaryTitle?: string;
   terminalOpen?: boolean;
   onTerminalOpenChange?: (open: boolean) => void;
@@ -498,7 +504,8 @@ export function SessionPage(props: SessionPageProps) {
   // The editor needs the local server's file routes: desktop, local workspaces.
   const editorAvailable = isElectronRuntime()
     && Boolean(props.omnirushServerClient && props.runtimeWorkspaceId)
-    && props.selectedWorkspaceDisplay.workspaceType !== "remote";
+    && props.selectedWorkspaceDisplay.workspaceType !== "remote"
+    && !props.workChat;
   // The layout: Chat (sessions sidebar + chat) or IDE (files, editor, terminal; chat docked right), per workspace.
   const storedLayoutMode = useEditorStore((state) => state.modeByWorkspace[props.selectedWorkspaceId] ?? "chat");
   // Full-page views (parallel tasks, library, dashboard, automations) always show in the Chat layout.
@@ -2126,6 +2133,8 @@ export function SessionPage(props: SessionPageProps) {
         <AppSidebar
           sessionNumberShortcuts={props.sessionNumberShortcuts}
           workspaceSessionGroups={props.sidebar.workspaceSessionGroups}
+          modeToggle={props.sidebar.modeToggle}
+          workNavigation={props.sidebar.workNavigation}
           selectedWorkspaceId={props.sidebar.selectedWorkspaceId}
           developerMode={props.sidebar.developerMode}
           selectedSessionId={props.sidebar.selectedSessionId}

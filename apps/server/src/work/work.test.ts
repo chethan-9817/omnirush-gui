@@ -1,0 +1,158 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { firstPartyRemote } from "../mcp-allow/mcp-allow.mjs";
+import { applyWork } from "./engine.js";
+import { WORK_PROMPT } from "./prompt.js";
+import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./routes.js";
+import { isWorkRoot, rememberedWorkSwitch, rememberWorkConnectors, rememberWorkSwitch, workEnvironment, workHome } from "./work.js";
+import type { Route } from "../routes/registry.js";
+import type { ServerConfig } from "../types.js";
+
+const temp = () => mkdtempSync(join(tmpdir(), "work-"));
+
+describe("work switch", () => {
+  test("off unless the server says enabled; a missing block turns it off; no answer keeps it", () => {
+    const dir = temp();
+    expect(rememberedWorkSwitch(dir).enabled).toBe(false);
+    expect(rememberWorkSwitch(dir, { work: { enabled: true, allow_users: "all", sources: ["google", "mock", "zendesk"] } })).toBe(true);
+    expect(rememberedWorkSwitch(dir)).toEqual({ enabled: true, sources: ["google", "mock"], message: null });
+    expect(rememberWorkSwitch(dir, null)).toBe(false);
+    expect(rememberedWorkSwitch(dir).enabled).toBe(true);
+    expect(rememberWorkSwitch(dir, { schema_versions: [1, 2, 3] })).toBe(true);
+    expect(rememberedWorkSwitch(dir).enabled).toBe(false);
+  });
+});
+
+describe("work folder and envelope", () => {
+  test("only <workDir>/<accountId> is a Work folder", () => {
+    const dir = temp();
+    expect(workHome(dir, "../x")).toBeNull();
+    expect(isWorkRoot(dir, workHome(dir, "user_1"))).toBe(true);
+    expect(isWorkRoot(dir, join(dir, "user_1", "sub"))).toBe(false);
+    expect(isWorkRoot(dir, "/tmp/project")).toBe(false);
+  });
+
+  test("a Work chat gets mode and the connected sources; any other chat gets nothing", () => {
+    const dir = temp();
+    rememberWorkConnectors(dir, [
+      { id: "google", status: "connected", sync_enabled: true },
+      { id: "slack", status: "syncing", sync_enabled: false },
+      { id: "hubspot", status: "disconnected", sync_enabled: false },
+      { id: "notion", status: "unavailable" },
+    ]);
+    expect(workEnvironment(dir, join(dir, "user_1"))).toEqual({ mode: "work", work: { connectors: [{ id: "google", enabled: true }, { id: "slack", enabled: false }] } });
+    expect(workEnvironment(dir, "/tmp/project")).toBeNull();
+  });
+});
+
+describe("first_party_remote", () => {
+  test("allows only the exact path on the configured origin", () => {
+    const origin = "http://127.0.0.1:8787";
+    expect(firstPartyRemote("work", origin, `${origin}/omnirush/work/mcp`, { Authorization: "Bearer x" })).toEqual({ type: "remote", url: `${origin}/omnirush/work/mcp`, oauth: false, enabled: true, headers: { Authorization: "Bearer x" } });
+    expect(firstPartyRemote("work", origin, "http://127.0.0.1:9999/omnirush/work/mcp")).toBeNull();
+    expect(firstPartyRemote("work", origin, `${origin}/omnirush/work/mcp/x`)).toBeNull();
+    expect(firstPartyRemote("work", "https://api.example.com", "https://evil.example.com/omnirush/work/mcp")).toBeNull();
+    expect(firstPartyRemote("other", origin, `${origin}/omnirush/work/mcp`)).toBeNull();
+    expect(firstPartyRemote("work", "", "/omnirush/work/mcp")).toBeNull();
+  });
+});
+
+describe("work engine config", () => {
+  const env = (dir: string) => ({ OMNIRUSH_WORK_DIR: dir, OMNIRUSH_SERVER_URL: "http://127.0.0.1:8787", OMNIRUSH_ACCESS_TOKEN: "engine-token" });
+
+  test("the Work folder gets the hosted server, asks for writes, no shell or code tools, the Work prompt", () => {
+    const dir = temp();
+    rememberWorkSwitch(dir, { work: { enabled: true, sources: ["mock"] } });
+    const target: Record<string, unknown> = { mcp: {}, permission: { "*": "allow" }, agent: { omnirush: { prompt: "coding", permission: { bash: "allow" } } } };
+    applyWork(target, join(dir, "user_1"), env(dir));
+    expect(target.mcp).toEqual({ "omnirush-work": { type: "remote", url: "http://127.0.0.1:8787/omnirush/work/mcp", oauth: false, enabled: true, headers: { Authorization: "Bearer engine-token" }, timeout: 60_000 } });
+    const permission = target.permission as Record<string, string>;
+    expect(permission["omnirush-work_*"]).toBe("ask");
+    expect(permission["omnirush-work_mock_search"]).toBe("allow");
+    expect(permission["omnirush-work_mock_send"]).toBeUndefined();
+    expect(permission.bash).toBe("deny");
+    expect((target.tools as Record<string, boolean>).bash).toBe(false);
+    const agent = (target.agent as Record<string, Record<string, unknown>>).omnirush;
+    expect(agent?.prompt).toBe(WORK_PROMPT);
+    expect((agent?.permission as Record<string, string>).bash).toBe("deny");
+  });
+
+  test("any other project, or Work off, is left exactly as it was", () => {
+    const dir = temp();
+    const before = { mcp: { a: { type: "local" } }, permission: { "*": "ask" }, agent: { omnirush: { prompt: "coding" } } };
+    const target = structuredClone(before);
+    rememberWorkSwitch(dir, { work: { enabled: true } });
+    applyWork(target, "/tmp/project", env(dir));
+    expect(target).toEqual(before);
+    rememberWorkSwitch(dir, { work: { enabled: false } });
+    applyWork(target, join(dir, "user_1"), env(dir));
+    expect(target).toEqual(before);
+  });
+});
+
+describe("work routes", () => {
+  const json = (data: unknown, status = 200) => Response.json(data, { status });
+  function setup(answer: (path: string, init: { method: string; body?: string; headers?: Record<string, string> }) => Response) {
+    const dir = temp();
+    const calls: string[] = [];
+    const routes: Route[] = [];
+    const broker: WorkBroker = {
+      workRequest: async (path, init) => { calls.push(`${init.method} ${path} ${init.body ?? ""}`); return answer(path, init); },
+      accountId: async () => "user_1",
+      capabilities: async () => ({ work: { enabled: true, sources: ["mock"] } }),
+    };
+    const config = { workspaces: [] } as unknown as ServerConfig;
+    registerWorkRoutes({ routes, config, workDir: () => dir, broker: () => broker, jsonResponse: json, readJsonBody: (r) => r.json(), addWorkspace: async (folderPath) => ({ id: "ws_work", name: "Work", path: folderPath, preset: "work", workspaceType: "local" }), applyEngine: async () => undefined });
+    const call = async (method: string, path: string, body?: unknown) => {
+      const route = routes.find((r) => r.method === method && r.regex.test(path));
+      if (!route) throw new Error(`no route ${method} ${path}`);
+      const params: Record<string, string> = {};
+      const match = path.match(route.regex);
+      route.keys.forEach((key, i) => { params[key] = match?.[i + 1] ?? ""; });
+      const request = new Request(`http://x${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      return route.handler({ request, url: new URL(request.url), params } as never);
+    };
+    return { dir, calls, call };
+  }
+
+  test("state, workspace and the connector calls go to /omnirush/work with the contract's shapes", async () => {
+    const { dir, calls, call } = setup((path) => path === "connectors"
+      ? json([{ id: "mock", label: "Mock", status: "connected", sync_enabled: true, records: 3, last_sync_at: null, scopes: [] }])
+      : path.endsWith("/start") ? json({ auth_url: "https://auth.example/x" }) : json({ ok: true, sync_enabled: false }));
+    expect(await (await call("GET", "/work/state")).json()).toEqual({ enabled: true, sources: ["mock"], message: null, workspaceId: null });
+    expect(await (await call("POST", "/work/workspace")).json()).toEqual({ workspaceId: "ws_work", path: join(dir, "user_1") });
+    expect((await (await call("GET", "/work/connectors")).json())[0].id).toBe("mock");
+    expect(workEnvironment(dir, join(dir, "user_1"))?.work.connectors).toEqual([{ id: "mock", enabled: true }]);
+    expect(await (await call("POST", "/work/connectors/mock/start")).json()).toEqual({ auth_url: "https://auth.example/x" });
+    expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: false })).status).toBe(200);
+    expect((await call("PATCH", "/work/connectors/mock", { sync_enabled: "no" })).status).toBe(400);
+    expect((await call("POST", "/work/connectors/zendesk/start")).status).toBe(404);
+    expect(calls).toEqual(["GET connectors ", "POST connectors/mock/start {}", "PATCH connectors/mock {\"sync_enabled\":false}"]);
+  });
+
+  test("the server's errors reach the app as they came (work_disabled)", async () => {
+    const { call } = setup(() => json({ detail: "work_disabled" }, 404));
+    const response = await call("GET", "/work/connectors");
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ detail: "work_disabled", code: "work_disabled", message: "Work is turned off for your account." });
+  });
+
+  test("the engine's MCP call is forwarded as POST with its MCP headers; GET is 405", async () => {
+    let seen: { body?: string; headers?: Record<string, string> } = {};
+    const broker: WorkBroker = {
+      workRequest: async (_path, init) => { seen = init; return new Response('{"jsonrpc":"2.0","id":1,"result":{}}', { headers: { "content-type": "application/json" } }); },
+      accountId: async () => null,
+      capabilities: async () => null,
+    };
+    const response = await forwardWorkMcp(new Request("http://x/omnirush/work/mcp", { method: "POST", body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}', headers: { "mcp-protocol-version": "2025-06-18", authorization: "Bearer engine" } }), broker);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ jsonrpc: "2.0", id: 1, result: {} });
+    expect(seen.body).toContain("tools/list");
+    expect(seen.headers?.["mcp-protocol-version"]).toBe("2025-06-18");
+    expect(JSON.stringify(seen.headers)).not.toContain("engine");
+    expect((await forwardWorkMcp(new Request("http://x/omnirush/work/mcp"), broker)).status).toBe(405);
+  });
+});

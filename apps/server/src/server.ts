@@ -129,7 +129,7 @@ import { registerOperationRoutes } from "./routes/operations.js";
 import { addRoute, matchRoute, type AuthMode, type RequestContext, type Route } from "./routes/registry.js";
 import { registerSessionGroupRoutes } from "./routes/session-groups.js";
 import { registerUiControlRoutes } from "./routes/ui-control.js";
-import { registerWorkspaceRoutes } from "./routes/workspaces.js";
+import { addLocalWorkspace, registerWorkspaceRoutes } from "./routes/workspaces.js";
 import { noteTaskPrompt, registerWorkspaceTaskRoutes, type TaskEngine } from "./routes/workspace-tasks.js";
 import { registerCloudMcpRoutes } from "./routes/cloud-mcp.js";
 import { registerLocalWorkflowRoutes } from "./routes/local-workflows.js";
@@ -192,6 +192,8 @@ import { rememberWebSearchSwitch, userWebSearchEnabled, webSearchAllowed, watchW
 import { askSideQuestion, brokerSideCall } from "./side-question.js";
 import { createChatTracker, rememberComputerUseSwitch } from "./computer-use/desktop.js";
 import { registerComputerUseRoutes } from "./computer-use/routes.js";
+import { forwardWorkMcp, registerWorkRoutes, type WorkBroker } from "./work/routes.js";
+import { rememberWorkSwitch, workDir } from "./work/work.js";
 import {
   applyProviderLockAnswer,
   assertConfigWithinLock,
@@ -334,6 +336,8 @@ const SIGN_OUT_FLUSH_MS = 10_000;
 const turnActivityByServer = new WeakMap<ServerConfig, TurnActivity>();
 /** Fresh capabilities for computer use (Electron main asks every 60 s while a session is open), per server. */
 const computerUseCapabilitiesByServer = new WeakMap<ServerConfig, (maxAgeMs: number) => Promise<unknown>>();
+/** Work mode's hop to /omnirush/work/* (work/routes.ts), per server; absent without an omnirush.ai account. */
+const workBrokersByServer = new WeakMap<ServerConfig, WorkBroker>();
 /** The chats prompted most recently, per server: a computer use call belongs to the latest one still running. */
 const computerUseChatsByServer = new WeakMap<ServerConfig, ReturnType<typeof createChatTracker>>();
 function computerUseChats(config: ServerConfig): ReturnType<typeof createChatTracker> {
@@ -346,11 +350,11 @@ function computerUseChats(config: ServerConfig): ReturnType<typeof createChatTra
 }
 
 /** Restarts the engine's projects (when idle) so they pick up the built-in computer use server. */
-async function applyComputerUseEngine(config: ServerConfig): Promise<void> {
+async function applyComputerUseEngine(config: ServerConfig, reason: RolloverReason = "computer_use"): Promise<void> {
   const pool = enginePoolForConfig(config);
   const workspaces = config.workspaces.filter((workspace) => resolveWorkspaceOpencodeConnection(config, workspace).baseUrl?.trim());
   const workspace = findManagedEngineWorkspace(workspaces) ?? workspaces[0];
-  if (pool && workspace) await pool.requestRollover({ reason: "computer_use", workspace, manual: true });
+  if (pool && workspace) await pool.requestRollover({ reason, workspace, manual: true });
 }
 
 /** Whether the agent works on this server's engine (turn-activity.ts), for an embedding app that asked (onTurnActivity). */
@@ -1433,6 +1437,11 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
   if (gatewayBroker.enabled) chatPinsByServer.set(config, (sessionId) => gatewayBroker.chatModel(sessionId));
   if (gatewayBroker.enabled) sideCallsByServer.set(config, brokerSideCall(gatewayBroker, config.omnirushEngineToken ?? ""));
   if (gatewayBroker.enabled) computerUseCapabilitiesByServer.set(config, (maxAgeMs) => gatewayBroker.sessionUploadCapabilities({ strict: true, maxAgeMs }));
+  if (gatewayBroker.enabled) workBrokersByServer.set(config, {
+    workRequest: (path, init) => gatewayBroker.workRequest(path, init),
+    accountId: () => gatewayBroker.accountId(),
+    capabilities: () => gatewayBroker.sessionUploadCapabilities({ strict: true }),
+  });
   voiceServicesByServer.set(config, new OmniRushVoiceService(gatewayBroker, {
     log: (level, message, attributes) => logger.log(level, message, attributes),
   }));
@@ -1538,8 +1547,12 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     // engine's projects so the built-in server comes or goes. Electron main reads it again every 60 s
     // while a computer use session is open (POST /computer-use/refresh).
     void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => (rememberComputerUseSwitch(runtimeStorageDir(config), capabilities) ? applyComputerUseEngine(config) : undefined)).catch(() => undefined);
+    // Work mode (work/work.ts): remembered from the same answer; a change restarts the engine's projects so the
+    // Work folder's hosted server comes or goes.
+    void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => (rememberWorkSwitch(workDir(runtimeStorageDir(config)), capabilities) ? applyComputerUseEngine(config, "work") : undefined)).catch(() => undefined);
     const computerUseTimer = setInterval(() => {
       void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => (rememberComputerUseSwitch(runtimeStorageDir(config), capabilities) ? applyComputerUseEngine(config) : undefined)).catch(() => undefined);
+      void gatewayBroker.sessionUploadCapabilities({ strict: true }).then((capabilities) => (rememberWorkSwitch(workDir(runtimeStorageDir(config)), capabilities) ? applyComputerUseEngine(config, "work") : undefined)).catch(() => undefined);
     }, BOX_DEFAULT_REFRESH_MS);
     computerUseTimer.unref?.();
     stopComputerUseWatch = () => clearInterval(computerUseTimer);
@@ -1874,6 +1887,18 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
         const response = jsonResponse(answer);
         response.headers.set("cache-control", "no-store");
         return finalize(response);
+      }
+      // Work mode's hosted MCP server for the engine (work/engine.ts): the engine's own token, the account's
+      // credential added here.
+      if (url.pathname === "/omnirush/work/mcp") {
+        authMode = "client";
+        const work = workBrokersByServer.get(config);
+        const given = Buffer.from((request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, ""));
+        const engineToken = Buffer.from(config.omnirushEngineToken ?? "");
+        if (!work || engineToken.length === 0 || given.length !== engineToken.length || !timingSafeEqual(given, engineToken)) {
+          return finalize(jsonResponse({ detail: "forbidden" }, 403));
+        }
+        return finalize(await forwardWorkMcp(request, work).catch(() => jsonResponse({ detail: "work_unreachable" }, 502)));
       }
       const gatewayMount = url.pathname.match(/^\/omnirush-gateway\/v1\/(.+)$/);
       if (gatewayMount?.[1]) {
@@ -5444,6 +5469,22 @@ function createRoutes(
     resolveOutboxEnabled,
     resolveInboxMaxBytes,
     scopeRank,
+  });
+
+  // Work mode (work/routes.ts): the switch, the Work workspace and the connectors.
+  registerWorkRoutes({
+    routes,
+    config,
+    workDir: () => workDir(runtimeStorageDir(config)),
+    broker: () => workBrokersByServer.get(config) ?? null,
+    jsonResponse,
+    readJsonBody,
+    addWorkspace: async (folderPath) => {
+      const { workspace } = await addLocalWorkspace(config, { folderPath, name: "Work", preset: "work" });
+      onWorkspacesChanged();
+      return workspace;
+    },
+    applyEngine: () => applyComputerUseEngine(config, "work"),
   });
 
   // Computer use (computer-use/routes.ts): for Electron main, which runs the host.

@@ -1955,6 +1955,8 @@ export class OmniRushGatewayBroker {
         ...(isRecord(payload.web_search) ? { web_search: payload.web_search } : {}),
         // Computer use (computer-use/desktop.ts reads it; absent is off).
         ...(isRecord(payload.computer_use) ? { computer_use: payload.computer_use } : {}),
+        // Work mode (work/work.ts reads it; absent is off).
+        ...(isRecord(payload.work) ? { work: payload.work } : {}),
         // The model provider lock (provider-lock.ts reads it; absent is locked).
         ...(isRecord(payload.providers) ? { providers: payload.providers } : {}),
         // Strict sessions (model-modes/strict-sessions.mjs reads it; absent is no bind).
@@ -1973,6 +1975,27 @@ export class OmniRushGatewayBroker {
    * `refresh: false` (the archiver's all-folders policy probe) it is one
    * request: a 401 is returned as it is, with no refresh and no second try.
    */
+  /**
+   * A Work mode call (`/omnirush/work/<path>`: connectors, the hosted MCP server), with the device bearer and
+   * the same bounded 401 refresh. Only the contract's paths; the answer is returned as it came.
+   */
+  workRequest(path: string, init: { method: "GET" | "POST" | "PATCH"; body?: string; headers?: Record<string, string>; signal?: AbortSignal }): Promise<Response> {
+    if (!/^(connectors(\/(google|microsoft|slack|hubspot|quickbooks|notion|mock)(\/(start|disconnect))?)?|mcp)$/.test(path)) {
+      return Promise.resolve(Response.json({ detail: "unsupported_work_path" }, { status: 404 }));
+    }
+    return this.withDeviceBearer((state) => this.fetcher(apiUrl(state.gatewayUrl, `work/${path}`), {
+      method: init.method,
+      headers: {
+        Accept: "application/json",
+        ...init.headers,
+        Authorization: `Bearer ${state.accessToken}`,
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(init.body === undefined ? {} : { body: init.body }),
+      signal: init.signal ?? AbortSignal.timeout(60_000),
+    }));
+  }
+
   archiveRequest(path: string, init: { method: "GET" | "POST"; body?: string; signal?: AbortSignal; refresh?: false }): Promise<Response> {
     const chain = ARCHIVE_CHAIN_PATH.test(path);
     if (!chain && !ARCHIVE_API_PATH.test(path)) return Promise.resolve(Response.json({ error: "unsupported_archive_path" }, { status: 404 }));

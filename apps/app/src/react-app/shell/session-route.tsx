@@ -114,6 +114,8 @@ import {
   type SessionPagePaneRuntime,
 } from "@/react-app/domains/session/chat/session-page";
 import { AutomationsPage } from "@/react-app/domains/automations/automations-page";
+import { isWorkModeShortcut, useWorkModeStore, useWorkState, WORK_CONNECTORS_ROUTE, WORK_HOME_ROUTE, WORK_PRESET, type AppMode } from "@/react-app/domains/work/work-mode";
+import { WorkConnectorsPage, WorkHome, WorkModeToggle } from "@/react-app/domains/work/work-views";
 import { AppsPage } from "@/react-app/domains/apps/apps-page";
 import { DashboardPage } from "@/react-app/domains/dashboard/dashboard-page";
 import { useDashboardDeploymentAvailability } from "@/react-app/domains/dashboard/dashboard-availability";
@@ -396,6 +398,8 @@ export function SessionRoute() {
   const automationsRouteRequested = /^\/automations(?:\/|$)/.test(location.pathname);
   const dashboardRouteRequested = /^\/dashboard(?:\/|$)/.test(location.pathname);
   const tasksRouteActive = /^\/workspace\/[^/]+\/tasks(?:\/|$)/.test(location.pathname);
+  // Work mode's home and Connectors page (domains/work); hidden unless the server turns Work on.
+  const workRouteRequested = /^\/work(?:\/|$)/.test(location.pathname);
   const {
     enabled: mcpAppsDashboardEnabled,
     loading: dashboardAvailabilityLoading,
@@ -532,12 +536,65 @@ export function SessionRoute() {
     runRemoteWorkspaceConnectionCheck,
   } = useWorkspaceRouteState({
     developerMode,
-    workspaceRoute: tasksRouteActive ? "tasks" : appsRouteActive ? "apps" : automationsRouteActive ? "automations" : dashboardWorkspaceRoute ? "dashboard" : "session",
+    workspaceRoute: workRouteRequested ? "work" : tasksRouteActive ? "tasks" : appsRouteActive ? "apps" : automationsRouteActive ? "automations" : dashboardWorkspaceRoute ? "dashboard" : "session",
     onServerSettingsChanged: () => setOmniRushServerSettingsVersion((value) => value + 1),
     onHostInfo: setOmniRushServerHostInfoState,
   });
   // Model picks here are the open project's own (project-model-prefs.ts); Settings keeps the app default.
   const local = useProjectModelLocal(appLocal, selectedWorkspaceId);
+  // Work mode: Code (today's app) or Work (business chats in the app-managed Work workspace). The mode
+  // follows the route; the last one picked is remembered and reopened at start.
+  const workState = useWorkState(client ?? null);
+  const workEnabled = workState.data?.enabled === true;
+  const storedAppMode = useWorkModeStore((state) => state.mode);
+  const workWorkspace = workspaces.find((workspace) => workspace.preset === WORK_PRESET && workspace.workspaceType !== "remote") ?? null;
+  const workChatActive = workEnabled && Boolean(selectedWorkspace && selectedWorkspace.preset === WORK_PRESET) && !workRouteRequested;
+  const workRouteActive = workEnabled && workRouteRequested;
+  const appMode: AppMode = workRouteActive || workChatActive ? "work" : "code";
+  const appModeRestored = useRef(false);
+  useEffect(() => {
+    if (workState.isPending) return;
+    if (workRouteRequested && !workEnabled) {
+      navigate("/session", { replace: true });
+      return;
+    }
+    if (appModeRestored.current || !workEnabled) return;
+    appModeRestored.current = true;
+    if (storedAppMode === "work" && appMode === "code" && !routeWorkspaceId) navigate(WORK_HOME_ROUTE, { replace: true });
+  }, [appMode, navigate, routeWorkspaceId, storedAppMode, workEnabled, workRouteRequested, workState.isPending]);
+  // The Work workspace is made on the first visit to Work (the server picks its folder).
+  const workWorkspaceRequested = useRef(false);
+  useEffect(() => {
+    if (!workRouteActive || workWorkspace || !client || workWorkspaceRequested.current) return;
+    workWorkspaceRequested.current = true;
+    void client.ensureWorkWorkspace()
+      .then(() => refreshRouteState())
+      .catch((error: unknown) => {
+        workWorkspaceRequested.current = false;
+        toast.error(error instanceof Error ? error.message : "Work could not be set up.");
+      });
+  }, [client, refreshRouteState, workRouteActive, workWorkspace]);
+  const switchAppMode = useCallback((mode: AppMode) => {
+    useWorkModeStore.getState().setMode(mode);
+    if (mode === "work") {
+      navigate(WORK_HOME_ROUTE);
+      return;
+    }
+    const codeWorkspace = workspaces.find((workspace) => workspace.preset !== WORK_PRESET && !workspace.task);
+    if (codeWorkspace) navigateToWorkspaceSession(codeWorkspace.id, readLastSessionFor(codeWorkspace.id));
+    else navigate("/session");
+  }, [navigate, navigateToWorkspaceSession, workspaces]);
+  useEffect(() => {
+    if (!workEnabled) return;
+    const mac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
+    const handler = (event: KeyboardEvent) => {
+      if (!isWorkModeShortcut(event, mac)) return;
+      event.preventDefault();
+      switchAppMode(appMode === "work" ? "code" : "work");
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [appMode, switchAppMode, workEnabled]);
   // "Send feedback" from a menu that does not know the open session (Help menu, sidebar).
   useEffect(() => {
     setFeedbackCurrentSession(selectedSessionId ?? null);
@@ -788,8 +845,11 @@ export function SessionRoute() {
   useSessionGroupSync({ workspaces, endpointForWorkspace });
   // A parallel task's own workspace is listed on its repository's board, not in the sidebar (unless it is open).
   const sidebarWorkspaceSessionGroups = useMemo(
-    () => workspaceSessionGroups.filter((group) => !group.workspace.task || group.workspace.id === selectedWorkspaceId),
-    [selectedWorkspaceId, workspaceSessionGroups],
+    () => workspaceSessionGroups
+      .filter((group) => !group.workspace.task || group.workspace.id === selectedWorkspaceId)
+      // Work lists only the Work workspace's chats; Code never lists it.
+      .filter((group) => !workEnabled || (group.workspace.preset === WORK_PRESET) === (appMode === "work")),
+    [appMode, selectedWorkspaceId, workEnabled, workspaceSessionGroups],
   );
   const tasksBoardWorkspaceId = selectedWorkspace?.task && workspaces.some((workspace) => workspace.id === selectedWorkspace.task?.parentWorkspaceId)
     ? selectedWorkspace.task.parentWorkspaceId
@@ -3509,10 +3569,11 @@ export function SessionRoute() {
     window.addEventListener("omnirush-open-project-folder", open);
     return () => window.removeEventListener("omnirush-open-project-folder", open);
   }, [openProjectFolder, platform.capabilities.nativeFilePicker]);
-  const newTaskComposerWithProjects = useMemo<NewTaskComposerContext | null>(() => newTaskComposerContext && {
+  // A Work chat has no project folder to pick; Code's picker never lists the Work workspace.
+  const newTaskComposerWithProjects = useMemo<NewTaskComposerContext | null>(() => newTaskComposerContext && (workChatActive ? newTaskComposerContext : {
     ...newTaskComposerContext,
     projectPicker: {
-      workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.displayNameResolved, path: workspace.path || null })),
+      workspaces: workspaces.filter((workspace) => !workEnabled || workspace.preset !== WORK_PRESET).map((workspace) => ({ id: workspace.id, name: workspace.displayNameResolved, path: workspace.path || null })),
       selectedId: selectedWorkspaceId || null,
       onSelect: (workspaceId: string) => {
         setLegacySelectedWorkspaceId(workspaceId);
@@ -3522,7 +3583,7 @@ export function SessionRoute() {
       },
       onOpenFolder: platform.capabilities.nativeFilePicker && canCreateWorkspaces() ? openProjectFolder : null,
     },
-  }, [navigateToWorkspaceSession, newTaskComposerContext, openProjectFolder, platform.capabilities.nativeFilePicker, selectedWorkspaceId, setLegacySelectedWorkspaceId, workspaces]);
+  }), [navigateToWorkspaceSession, newTaskComposerContext, openProjectFolder, platform.capabilities.nativeFilePicker, selectedWorkspaceId, setLegacySelectedWorkspaceId, workChatActive, workEnabled, workspaces]);
 
   /**
    * Chat-first onboarding: the empty-state composer creates a default chat
@@ -3642,6 +3703,16 @@ export function SessionRoute() {
       setCreateWorkspaceRemoteBusy(false);
     }
   }, [client, local, refreshRouteState]);
+
+  const startWorkChat = async (prompt: string) => {
+    const workspaceId = workWorkspace?.id;
+    if (!workspaceId) throw new Error("Work is still getting ready. Try again in a moment.");
+    const sessionId = await handleCreateTaskInWorkspaceWithOpenMode(workspaceId, "primary");
+    if (!sessionId) throw new Error("Could not start a chat. Try again in a moment.");
+    saveSessionDraft(sessionDraftScope, workspaceId, sessionId, { text: prompt, mode: "prompt" });
+    useComposerStateStore.getState().setDraft(sessionId, prompt);
+    markComposerAutoSend(sessionId);
+  };
 
   const startAppConversation = async (prompt: string) => {
     const sessionId = await handleCreateTaskInWorkspaceWithOpenMode(selectedWorkspaceId, "primary");
@@ -3767,8 +3838,20 @@ export function SessionRoute() {
           }}
         />
       }
-      primaryTitle={appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
-      primarySlot={tasksRouteActive && tasksAvailable ? (
+      primaryTitle={workRouteActive ? (location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? "Connectors" : "Work") : appsRouteActive ? "Dashboard" : automationsRouteActive ? "Automations" : dashboardRouteActive ? "Dashboard" : tasksRouteActive ? "Parallel tasks" : undefined}
+      workChat={workChatActive}
+      primarySlot={workRouteActive ? (
+        location.pathname.startsWith(WORK_CONNECTORS_ROUTE) ? (
+          <WorkConnectorsPage client={client ?? null} openLink={(url) => platform.openLink(url)} onBack={() => navigate(WORK_HOME_ROUTE)} />
+        ) : (
+          <WorkHome
+            busy={!workWorkspace}
+            message={workState.data?.message ?? null}
+            onStart={startWorkChat}
+            onOpenConnectors={() => navigate(WORK_CONNECTORS_ROUTE)}
+          />
+        )
+      ) : tasksRouteActive && tasksAvailable ? (
         <TasksBoardPage
           client={client}
           workspaceId={tasksBoardWorkspaceId}
@@ -3804,7 +3887,7 @@ export function SessionRoute() {
           <DashboardPage fallbackEndpoints={dashboardFallbackEndpoints} onCreateApp={startAppConversation} />
         </WorkspaceProvider>
       ) : undefined}
-      terminalOpen={terminalOpen}
+      terminalOpen={terminalOpen && !workChatActive}
       onTerminalOpenChange={setTerminalOpen}
       opencodeClient={opencodeClient}
       onSessionTabsChange={(tabs) => {
@@ -3812,6 +3895,8 @@ export function SessionRoute() {
       }}
       sidebar={{
         workspaceSessionGroups: sidebarWorkspaceSessionGroups,
+        modeToggle: workEnabled ? <WorkModeToggle mode={appMode} onChange={switchAppMode} shortcut={/Mac/i.test(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘⇧K" : "Ctrl+Shift+K"} /> : undefined,
+        workNavigation: appMode === "work" ? { onOpenHome: () => navigate(WORK_HOME_ROUTE), onOpenConnectors: () => navigate(WORK_CONNECTORS_ROUTE), connectorsActive: location.pathname.startsWith(WORK_CONNECTORS_ROUTE) } : undefined,
         selectedWorkspaceId,
         selectedSessionId,
         developerMode: false,
@@ -3868,6 +3953,11 @@ export function SessionRoute() {
         },
         onPrefetchSession: () => {},
         onCreateTaskInWorkspace: (workspaceId, groupId) => {
+          // A new Work chat starts from the Work home (templates); Code is unchanged.
+          if (appMode === "work") {
+            navigate(WORK_HOME_ROUTE);
+            return;
+          }
           const { focusedPane, secondary } = useWorkbenchStore.getState();
           const hasWorkspaceError = Boolean(errorsByWorkspaceId[workspaceId]?.trim())
             || workspaceConnectionStateById[workspaceId]?.status === "error";

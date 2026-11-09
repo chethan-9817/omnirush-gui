@@ -337,6 +337,25 @@ export function normalizeRemoteUrl(value) {
   return `${scheme}://${host}${port ? `:${port}` : ""}${path.replace(/\/+$/, "") || "/"}`;
 }
 
+// The app's own remote servers (first_party_remote): not on the server's list and not from a config file, added
+// by the app itself, each allowed only at its exact path on the API origin the app is configured with. `work`:
+// the hosted Work connectors (OmniRush Work mode), reached with the app's own credential.
+export const FIRST_PARTY_REMOTE = {
+  work: { id: "omnirush-work", path: "/omnirush/work/mcp", title: "OmniRush Work" },
+};
+
+/**
+ * The engine entry of a first_party_remote server, or null: `url` must be exactly the entry's path on `origin`
+ * (the configured API origin; no other host, port, path or scheme), `headers` only the app's own.
+ */
+export function firstPartyRemote(name, origin, url, headers = {}) {
+  const entry = FIRST_PARTY_REMOTE[name];
+  const base = typeof origin === "string" ? origin.replace(/\/+$/, "") : "";
+  const expected = entry && base ? normalizeRemoteUrl(`${base}${entry.path}`) : null;
+  if (!expected || normalizeRemoteUrl(url) !== expected) return null;
+  return { type: "remote", url: expected, oauth: false, enabled: true, ...(isRecord(headers) && Object.keys(headers).length ? { headers: { ...headers } } : {}) };
+}
+
 function normalizeRemoteEntry(value, id) {
   const url = normalizeRemoteUrl(value.url);
   const pkg = text(value.package, 214);
