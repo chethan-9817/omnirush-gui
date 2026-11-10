@@ -1,6 +1,7 @@
 // The "omnirush-claude" engine provider: each turn of a Claude chat runs real
-// Claude Code (headless, stream-json) in the project's OmniRush box, and its
-// events become the engine's parts (map.js). AI SDK LanguageModelV3, loaded by
+// Claude Code (headless, stream-json) in the project's OmniRush box, or on this
+// machine when the chat's project has no box (the sandbox off or unavailable, as
+// for the other models), and its events become the engine's parts (map.js). AI SDK LanguageModelV3, loaded by
 // the 2.x engine as `aisdk:file://…/index.js` (the first `create*` export).
 // Shared by omnirush-cli and omnirush-gui (PARITY.sha256).
 //
@@ -12,8 +13,8 @@
 //                  history has replies; asked again every 60 s while a turn runs, refresh: true)
 //                {op:"end", sessionID, uuid, ok} after a turn (the app uploads the transcript)
 //   grantKey   that header's value
-//   shell      boxsh (the engine's box shell); boxHome the box home (boxes/<key>.json,
-//              projects/<key> = the box's /run/omnirush)
+//   shell      boxsh (the engine's box shell), unset when this run has no box; boxHome the
+//              box home, always (boxes/<key>.json, projects/<key> = the box's /run/omnirush)
 //   directory  the project folder (default: the engine's cwd); a request header
 //              x-omnirush-directory names it instead (one desktop engine, many projects)
 //   client     "cli/2.7.3" | "gui/3.8.0": X-OmniRush-Client to the relay
@@ -22,6 +23,11 @@
 // apiKeyHelper; nothing else of this machine's env enters the box.
 // Claude's session id is uuidv5(engine session id); its config folder is the
 // box's /run/omnirush/claude/config (host: <boxHome>/projects/<key>/claude/config).
+// Without a box (`shell` unset, or a desktop project the desktop does not box,
+// <boxHome>/desktop-projects.json): the same host folder is Claude's
+// CLAUDE_CONFIG_DIR (never the person's ~/.claude), Claude Code is the pinned
+// build for this machine (<boxHome>/claude/<version>-<platform>-<arch>/), and
+// it runs with this machine's env minus the app's names (HOST_ENV_DROP).
 //
 // Stop arrives as the stream's cancel() (the engine passes no abortSignal):
 // an interrupt on Claude's stdin, then SIGINT, then SIGKILL.
@@ -40,15 +46,26 @@ import path from "node:path";
 import { apiError, ClaudeStreamMapper, lastUserContent } from "./map.js";
 
 export const CLAUDE_CODE_VERSION = "2.1.306";
-// The pinned linux build (npm @anthropic-ai/claude-code-linux-<arch>): installed into the box on first use.
+const build = (target, integrity) => ({ url: `https://registry.npmjs.org/@anthropic-ai/claude-code-${target}/-/claude-code-${target}-${CLAUDE_CODE_VERSION}.tgz`, integrity });
+// The pinned builds (npm @anthropic-ai/claude-code-<platform>-<arch>), each downloaded once per machine: linux-<arch>
+// is installed into the box on first use, this machine's own runs a chat without a box.
 // shortcut: until the box image carries it (box-base 2026.11.x), each box downloads it once (131 MB).
+// shortcut: a musl Linux host (Alpine) gets the glibc build and fails to start it; add the -musl builds if one shows up.
 export const CLAUDE_CODE_BUILDS = {
-  x64: { url: `https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-${CLAUDE_CODE_VERSION}.tgz`, integrity: "sha512-4gsb0IQhxzi1NhoUETXkNZb1t6wJ9tnfAYBKmb0+NmsAwOG37Dacq7bLqsooEkusaT0PyQRFUMt0SgWxx9LEEA==" },
-  arm64: { url: `https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-${CLAUDE_CODE_VERSION}.tgz`, integrity: "sha512-AePKWuymgDSCh7nScJ4dx/pF1Kppzk4IwQuh6JCROiqQdBVGaaHw6jVf/fY5PhbSjy9EQML6yOiUfc50aFpnTA==" },
+  "linux-x64": build("linux-x64", "sha512-4gsb0IQhxzi1NhoUETXkNZb1t6wJ9tnfAYBKmb0+NmsAwOG37Dacq7bLqsooEkusaT0PyQRFUMt0SgWxx9LEEA=="),
+  "linux-arm64": build("linux-arm64", "sha512-AePKWuymgDSCh7nScJ4dx/pF1Kppzk4IwQuh6JCROiqQdBVGaaHw6jVf/fY5PhbSjy9EQML6yOiUfc50aFpnTA=="),
+  "darwin-arm64": build("darwin-arm64", "sha512-rX3L0TI2pZdl/SLmqRucVutnPgByT2ZTwU1+/N19okhd/5Grj7np5xhXNycqpEq9JhNX4/DOujb1TxhHii0agA=="),
+  "darwin-x64": build("darwin-x64", "sha512-Jq9enPwecu+1GUwvjB8vTdjnyzA1CtSsKW9PkP3atjt5kcZrCqjnXPvBT7lVZ1dDjQdqe57fk3m4vY6kqrrDXg=="),
+  "win32-x64": build("win32-x64", "sha512-MpqvdPxktYYaCzTp+Lcvjp5r2fnLWRWxSd7hwilVCUfAvJC6Zm/W+t7TCeEk1xGH++3BWL57FmHDN/w5k9AiiQ=="),
+  "win32-arm64": build("win32-arm64", "sha512-a4AwcYoHKlayAbWivYSBu9CYJVUOGPrtUO/N6RsJXFkzG7BdqNF9K7aAzjfY2ZBpnrKnJl3xzjOt5eBmS6B3FA=="),
 };
 export const PROVIDER_ID = "omnirush-claude";
-/** A Claude turn where the sandbox isn't running (off, or it cannot run on this machine). */
-export const NO_BOX = "Claude runs only in the OmniRush sandbox, and the sandbox isn't running for this project, so Claude can't start here.";
+/** A Claude turn of a boxed project whose box isn't running, or one the app gave no box folder. */
+export const NO_BOX = "This project runs in the OmniRush sandbox, and the sandbox isn't running for it, so Claude can't start here.";
+/** A Claude turn without a box that the relay refuses (403: a server that runs Claude only in the box). */
+export const NATIVE_REFUSED = "The server runs Claude only in the OmniRush sandbox for now, so Claude can't run here. Turn the sandbox on for this project, or pick another model.";
+/** The host env names a Claude run without a box never gets: the app's own (its secrets among them), and any that would route Claude Code elsewhere. */
+export const HOST_ENV_DROP = /^(OMNIRUSH_|OPENCODE_|ANTHROPIC_|CLAUDE_|AWS_BEARER_TOKEN_BEDROCK$)/i;
 const BOX_RUN = "/run/omnirush";
 const BOX_BIN = `/opt/omnirush/claude/${CLAUDE_CODE_VERSION}/claude`;
 const STOP_GRACE_MS = 5_000;
@@ -131,25 +148,50 @@ export function installLogDir(boxHome, client, env = process.env) {
   return env.OMNIRUSH_PKGLOG_DIR || null;
 }
 
-/** The env Claude Code runs with in the box (passed by boxsh through OMNIRUSH_BOX_PASS_ENV). */
-export function claudeEnv({ model, baseUrl, sessionID, client, pkglogDir = null }) {
+/**
+ * The env Claude Code runs with: in the box (passed by boxsh through OMNIRUSH_BOX_PASS_ENV), or with `configDir`, on
+ * this machine (no X-OmniRush-Box: the relay serves it only while the server runs Claude outside the box too).
+ */
+export function claudeEnv({ model, baseUrl, sessionID, client, pkglogDir = null, configDir = null }) {
   const env = {
-    CLAUDE_CONFIG_DIR: `${BOX_RUN}/claude/config`,
+    CLAUDE_CONFIG_DIR: configDir ?? `${BOX_RUN}/claude/config`,
     ANTHROPIC_BASE_URL: baseUrl,
-    ANTHROPIC_CUSTOM_HEADERS: `X-OmniRush-Box: 1\nX-OmniRush-Session-Id: ${sessionID}\nX-OmniRush-Client: ${client}`,
+    ANTHROPIC_CUSTOM_HEADERS: `${configDir ? "" : "X-OmniRush-Box: 1\n"}X-OmniRush-Session-Id: ${sessionID}\nX-OmniRush-Client: ${client}`,
     CLAUDE_CODE_API_KEY_HELPER_TTL_MS: String(REFRESH_MS),
     // The relay serves the chat's model only: every model Claude Code would pick on its own is that one.
     ANTHROPIC_MODEL: model, ANTHROPIC_SMALL_FAST_MODEL: model, ANTHROPIC_DEFAULT_OPUS_MODEL: model,
     ANTHROPIC_DEFAULT_SONNET_MODEL: model, ANTHROPIC_DEFAULT_HAIKU_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model,
     DISABLE_AUTOUPDATER: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
     // The box is the boundary that makes running without asks acceptable (it runs as root in a container).
-    IS_SANDBOX: "1",
+    ...(configDir ? {} : { IS_SANDBOX: "1" }),
     // The install log: Claude's commands (its sub-agents' too) note installs where the app reads this chat's, and
     // name the chat (the engine names no call of Claude's: the app matches them to the chat's turn).
     OMNIRUSH_SESSION: sessionID,
     ...(pkglogDir ? { OMNIRUSH_PKGLOG_DIR: pkglogDir } : {}),
   };
   return env;
+}
+
+/** This machine's env for a Claude run without a box: without HOST_ENV_DROP's names, the person's data home back (the desktop engine has its own), then `passed`. */
+export function hostEnv(base, passed) {
+  const env = Object.fromEntries(Object.entries(base).filter(([name]) => !HOST_ENV_DROP.test(name)));
+  if (base.OMNIRUSH_USER_XDG_DATA_HOME?.trim()) env.XDG_DATA_HOME = base.OMNIRUSH_USER_XDG_DATA_HOME.trim();
+  return { ...env, ...passed };
+}
+
+/** Claude Code's apiKeyHelper: the token file read by the shell it runs the helper in (cmd on Windows). */
+export function keyHelper(tokenFile, platform = process.platform) {
+  return platform === "win32" ? `type "${tokenFile}"` : `cat '${tokenFile.replace(/'/g, "'\\''")}'`;
+}
+
+/** Whether this turn runs in the project's box: the app gave a box shell, and a desktop chat's project is one the desktop boxes (not a chat kept on this machine). */
+export function boxedTurn({ shell, boxHome, client, key, sessionID }) {
+  if (!shell) return false;
+  if (!String(client).startsWith("gui/")) return true;
+  try {
+    const listed = JSON.parse(fs.readFileSync(path.join(boxHome, "desktop-projects.json"), "utf8"));
+    return Array.isArray(listed?.keys) && listed.keys.includes(key) && !(Array.isArray(listed.native_chats) && listed.native_chats.includes(sessionID));
+  } catch { return false; }
 }
 
 const lower = (headers) => Object.fromEntries(Object.entries(headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
@@ -159,16 +201,19 @@ function readRecord(home, key) {
   try { return JSON.parse(fs.readFileSync(path.join(home, "boxes", `${key}.json`), "utf8")); } catch { return null; }
 }
 
-/** One command in the box through boxsh; resolves its exit code. */
-function inBox(shell, env, cwd, command, args = []) {
+/** One command; resolves its exit code and the end of its stderr. */
+function run(bin, args, { cwd, env } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(shell, ["-c", command, ...args], { cwd, env, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    const child = spawn(bin, args, { cwd, env, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
     let err = "";
     child.stderr.on("data", (d) => { err = (err + d).slice(-2000); });
     child.on("error", (e) => resolve({ code: 127, err: e.message }));
     child.on("close", (code) => resolve({ code: code ?? 1, err }));
   });
 }
+
+/** One command in the box through boxsh. */
+const inBox = (shell, env, cwd, command, args = []) => run(shell, ["-c", command, ...args], { cwd, env });
 
 async function download(build, file) {
   const response = await fetch(build.url, { redirect: "follow" });
@@ -184,6 +229,15 @@ async function download(build, file) {
   } catch (error) { fs.rmSync(tmp, { force: true }); throw error; }
 }
 
+/** The pinned build's package in <home>/claude/, downloaded once per machine. */
+async function cachedBuild(home, build) {
+  const cache = path.join(home, "claude");
+  fs.mkdirSync(cache, { recursive: true });
+  const tgz = path.join(cache, path.basename(new URL(build.url).pathname));
+  if (!fs.existsSync(tgz)) await download(build, tgz);
+  return tgz;
+}
+
 const installs = new Map();
 /** Claude Code at BOX_BIN in this box: probed, else the pinned build downloaded once per machine and unpacked in the box. */
 function ensureClaude({ shell, env, cwd, home, run }) {
@@ -191,11 +245,7 @@ function ensureClaude({ shell, env, cwd, home, run }) {
   if (!installs.has(key)) {
     installs.set(key, (async () => {
       if ((await inBox(shell, env, cwd, `test -x ${BOX_BIN}`)).code === 0) return;
-      const build = CLAUDE_CODE_BUILDS[os.arch()] ?? CLAUDE_CODE_BUILDS.x64;
-      const cache = path.join(home, "claude");
-      fs.mkdirSync(cache, { recursive: true });
-      const tgz = path.join(cache, path.basename(new URL(build.url).pathname));
-      if (!fs.existsSync(tgz)) await download(build, tgz);
+      const tgz = await cachedBuild(home, CLAUDE_CODE_BUILDS[`linux-${os.arch()}`] ?? CLAUDE_CODE_BUILDS["linux-x64"]);
       const staged = path.join(run, "install.tgz");
       fs.rmSync(staged, { force: true });
       try { fs.linkSync(tgz, staged); } catch { fs.copyFileSync(tgz, staged); }
@@ -209,6 +259,38 @@ function ensureClaude({ shell, env, cwd, home, run }) {
   }
   return installs.get(key);
 }
+
+/** Claude Code on this machine: the pinned build for it, unpacked once into <home>/claude/<version>-<platform>-<arch>/. Its path. */
+export function ensureHostClaude(home, target = `${process.platform}-${os.arch()}`) {
+  const key = `host:${home}:${target}`;
+  if (!installs.has(key)) {
+    installs.set(key, (async () => {
+      const found = CLAUDE_CODE_BUILDS[target];
+      if (!found) throw new Error(`Claude Code has no build for this machine (${target})`);
+      const name = target.startsWith("win32-") ? "claude.exe" : "claude";
+      const dir = path.join(home, "claude", `${CLAUDE_CODE_VERSION}-${target}`);
+      const bin = path.join(dir, name);
+      if (fs.existsSync(bin)) return bin;
+      const tgz = await cachedBuild(home, found);
+      const tmp = `${dir}.${process.pid}.tmp`;
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.mkdirSync(tmp, { recursive: true });
+      try {
+        // tar ships with Linux, macOS and Windows 10+.
+        const done = await run("tar", ["-xzf", tgz, "-C", tmp, `package/${name}`]);
+        if (done.code !== 0) throw new Error(`Claude Code could not be unpacked (${done.err.trim().split("\n").at(-1) || done.code})`);
+        fs.chmodSync(path.join(tmp, "package", name), 0o755);
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.renameSync(path.join(tmp, "package"), dir);
+      } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+      return bin;
+    })().catch((error) => { installs.delete(key); throw error; }));
+  }
+  return installs.get(key);
+}
+
+// Claude runs on this machine, by chat (its uuid): a new launch of a chat ends the earlier one still running.
+const hostRuns = new Map();
 
 class ClaudeCodeModel {
   specificationVersion = "v3";
@@ -250,9 +332,12 @@ class ClaudeCodeModel {
     // One desktop engine serves every project: the request names its folder.
     const root = path.resolve(headers["x-omnirush-directory"] || directory || process.cwd());
     const key = boxKey(root);
-    const record = boxHome ? readRecord(boxHome, key) : null;
+    if (!boxHome) throw apiError(this.settings.noBox || NO_BOX);
+    // The chat's project has no box (the sandbox off or unavailable): Claude runs on this machine, as the other models do.
+    const boxed = boxedTurn({ shell, boxHome, client, key, sessionID });
+    const record = boxed ? readRecord(boxHome, key) : null;
     // `noBox`: the app's own words for where to look (the CLI names its command; the desktop has none).
-    if (!shell || !record || record.state === "off") throw apiError(this.settings.noBox || NO_BOX);
+    if (boxed && (!record || record.state === "off")) throw apiError(this.settings.noBox || NO_BOX);
     const run = path.join(boxHome, "projects", key, "claude");
     const configDir = path.join(run, "config");
     fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
@@ -266,19 +351,32 @@ class ClaudeCodeModel {
     const tokenFile = path.join(run, "token");
     const writeToken = (token) => { fs.writeFileSync(`${tokenFile}.tmp`, token, { mode: 0o600 }); fs.renameSync(`${tokenFile}.tmp`, tokenFile); };
     writeToken(grant.token);
-    fs.writeFileSync(path.join(configDir, "settings.json"), `${JSON.stringify({ apiKeyHelper: `cat ${BOX_RUN}/claude/token` })}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(configDir, "settings.json"), `${JSON.stringify({ apiKeyHelper: boxed ? `cat ${BOX_RUN}/claude/token` : keyHelper(tokenFile) })}\n`, { mode: 0o600 });
 
-    const passed = claudeEnv({ model: this.modelId, baseUrl: grant.baseUrl, sessionID, client: grant.client || client, pkglogDir: installLogDir(boxHome, client) });
-    const env = { ...process.env, ...passed, OMNIRUSH_BOX_KEY: key, OMNIRUSH_BOX_HOME: boxHome, OMNIRUSH_BOX_PASS_ENV: Object.keys(passed).join(",") };
-    try { await ensureClaude({ shell, env, cwd: root, home: boxHome, run }); } catch (error) { throw apiError(error?.message || "Claude Code could not be installed in the sandbox."); }
-
+    const passed = claudeEnv({ model: this.modelId, baseUrl: grant.baseUrl, sessionID, client: grant.client || client, pkglogDir: installLogDir(boxHome, client), ...(boxed ? {} : { configDir }) });
+    const firstLine = `${JSON.stringify({ type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: uuid })}\n`;
     const turnFile = path.join(run, `turn-${uuid}.jsonl`);
-    fs.writeFileSync(turnFile, `${JSON.stringify({ type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: uuid })}\n`, { mode: 0o600 });
-    const child = spawn(shell, ["-c", LAUNCH, BOX_BIN, `${BOX_RUN}/claude`, uuid, ...claudeArgs({ model: this.modelId })], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    let child;
+    if (boxed) {
+      const env = { ...process.env, ...passed, OMNIRUSH_BOX_KEY: key, OMNIRUSH_BOX_HOME: boxHome, OMNIRUSH_BOX_PASS_ENV: Object.keys(passed).join(",") };
+      try { await ensureClaude({ shell, env, cwd: root, home: boxHome, run }); } catch (error) { throw apiError(error?.message || "Claude Code could not be installed in the sandbox."); }
+      fs.writeFileSync(turnFile, firstLine, { mode: 0o600 });
+      child = spawn(shell, ["-c", LAUNCH, BOX_BIN, `${BOX_RUN}/claude`, uuid, ...claudeArgs({ model: this.modelId })], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    } else {
+      let bin;
+      try { bin = await ensureHostClaude(boxHome); } catch (error) { throw apiError(error?.message || "Claude Code could not be installed."); }
+      const running = hostRuns.get(uuid);
+      if (running && running.exitCode === null && running.signalCode === null) running.kill("SIGKILL");
+      child = spawn(bin, [...claudeArgs({ model: this.modelId }), resume ? "--resume" : "--session-id", uuid], { cwd: root, env: hostEnv(process.env, passed), stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      hostRuns.set(uuid, child);
+      child.on("close", () => { if (hostRuns.get(uuid) === child) hostRuns.delete(uuid); });
+      child.stdin.write(firstLine);
+    }
     const mapper = new ClaudeStreamMapper({ compaction });
     let stderr = "";
     let done = false;
     let stopped = false;
+    let refused = null;
     const refresh = setInterval(() => { void this.grant({ ...ask, refresh: true }).then((next) => { grant = next; writeToken(next.token); }).catch(() => undefined); }, REFRESH_MS);
     refresh.unref?.();
     const timers = [];
@@ -304,19 +402,25 @@ class ClaudeCodeModel {
               if (!line) continue;
               let event;
               try { event = JSON.parse(line); } catch { continue; }
+              // Claude Code retries a 403 for minutes; without a box it is the relay refusing the turn for good.
+              if (!boxed && !refused && event.type === "system" && event.subtype === "api_retry" && event.error_status === 403) {
+                refused = NATIVE_REFUSED;
+                child.kill("SIGKILL");
+                continue;
+              }
               for (const part of mapper.push(event)) send(part);
               // The turn is over: Claude exits once its input ends.
               if (event.type === "result") child.stdin.end();
             }
           });
-          child.on("error", (error) => { if (done) return; send({ type: "error", error: apiError(`Claude Code could not start in the sandbox (${error.message}).`) }); end(); controller.close(); });
+          child.on("error", (error) => { if (done) return; send({ type: "error", error: apiError(`Claude Code could not start${boxed ? " in the sandbox" : ""} (${error.message}).`) }); end(); controller.close(); });
           // The turn's native transcript goes up with the chat (best effort), a stopped turn's too once Claude has exited.
           const ended = (ok) => void fetch(settings.grantURL, { method: "POST", headers: { "content-type": "application/json", "x-omnirush-usage-key": settings.grantKey || "" }, body: JSON.stringify({ op: "end", sessionID, uuid, ok }) }).catch(() => undefined);
           child.on("close", (code) => {
             if (stopped) return ended(false);
             if (done) return;
             const tail = stderr.trim().split("\n").filter(Boolean).at(-1);
-            const last = mapper.finish(`Claude Code stopped before the turn finished${tail ? `: ${tail.slice(0, 300)}` : ` (exit ${code})`}.`);
+            const last = refused ? { type: "error", error: apiError(refused) } : mapper.finish(`Claude Code stopped before the turn finished${tail ? `: ${tail.slice(0, 300)}` : ` (exit ${code})`}.`);
             for (const part of mapper.close()) send(part);
             send(last);
             end();

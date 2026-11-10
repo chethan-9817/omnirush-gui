@@ -139,7 +139,7 @@ function internalGatewayProvider(runtime: InternalGatewayRuntime, catalog: OmniR
 
 /**
  * The Claude provider of the 2.x engine (opencode-plugins/claude-provider, the CLI's assets/claude-provider):
- * Claude's catalog models, each turn real Claude Code in the project's box, its events the engine's parts.
+ * Claude's catalog models, each turn real Claude Code in the project's box (or on this computer without one), its events the engine's parts.
  * `entries`: the account's Claude catalog (every entry: picking one the account may not run explains);
  * `settings`: the provider's options (grantURL, grantKey, shell, boxHome, client, note). Null without entries.
  */

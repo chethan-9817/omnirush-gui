@@ -16,7 +16,7 @@ export const CLAUDE_CODE_VERSION = "2.1.306";
 export const CLAUDE_CONTRACT = createHash("sha256").update(JSON.stringify({ claude_code: CLAUDE_CODE_VERSION, provider: 1, runtime: "box" })).digest("hex");
 export const CLAUDE_PROVIDER_ID = "omnirush-claude";
 /** Shown once at a Claude chat's start (phase 1: no permission asks inside the box). */
-export const CLAUDE_AUTO_NOTE = "Claude runs in Auto mode inside the sandbox: it doesn't ask before changes yet.";
+export const CLAUDE_AUTO_NOTE = "Claude runs in Auto mode: it doesn't ask before changes yet.";
 
 export function claudeNotAllowedMessage(name: string): string {
   return `${name} isn't available on your account yet.`;

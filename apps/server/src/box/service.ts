@@ -307,12 +307,12 @@ export class BoxService {
     return detectRuntime({ boxHome: this.home, env: this.env, ...this.detectOptions(), ...extra });
   }
 
-  /** The Claude provider's box bits (opencode-plugins/claude-provider): the box home and the box shell; null without the shell helper. */
-  claudeBits(): { home: string; shell: string } | null {
+  /** The Claude provider's box bits (opencode-plugins/claude-provider): the box home and the box shell (null without the shell helper: Claude runs on this computer). */
+  claudeBits(): { home: string; shell: string | null } {
     try {
       return { home: this.home, shell: installShell(this.home, { env: this.env }) };
     } catch {
-      return null;
+      return { home: this.home, shell: null };
     }
   }
 
