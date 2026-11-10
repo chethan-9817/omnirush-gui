@@ -1645,7 +1645,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
     onTurnEnd: async ({ sessionID, uuid, grant }) => {
       const capture = captureServicesByServer.get(config);
       const bits = boxServiceFor(config).claudeBits();
-      const configDir = grant && uuid && bits ? claudeConfigDirOf(bits.home, uuid) : null;
+      const configDir = grant && uuid ? claudeConfigDirOf(bits.home, uuid) : null;
       if (!grant || !configDir || !capture?.uploadEnabled || !capture.hasSession(sessionID)) return;
       const uploader = new ArchiveUploader({ fetch: externalFetch, request: (route, init) => gatewayBroker.nativeCaptureRequest(grant.owner, route, init) });
       const receipt = await uploadClaudeTurn({
@@ -1672,7 +1672,7 @@ export async function startServer(config: ServerConfig): Promise<ServeResult> {
       mirroredClaude = (access.catalog ?? []).map((entry) => entry.id).join(",");
       return claudeEngineProvider(access.catalog ?? [], {
         grantURL: `http://127.0.0.1:${config.port}/omnirush-claude/turn`, grantKey: claudeKey,
-        ...(bits ? { shell: bits.shell, boxHome: bits.home } : {}),
+        boxHome: bits.home, ...(bits.shell ? { shell: bits.shell } : {}),
         client: `gui/${config.appVersion?.trim() || SERVER_VERSION}`, note: CLAUDE_AUTO_NOTE,
       });
     },
